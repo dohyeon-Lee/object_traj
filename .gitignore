@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# generated outputs
+videos/
+
+# wandb local logs
+wandb/
+
+# dataset (download separately)
+006_*/
+
+# logs
+*.log
