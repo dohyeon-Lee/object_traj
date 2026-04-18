@@ -8,8 +8,8 @@
     <td align="center"><b>Robot Tracking (same viewpoint)</b></td>
   </tr>
   <tr>
-    <td><video src="videos/006_mustard_bottle_20200709_143211/trajectory.mp4" controls width="480"></video></td>
-    <td><video src="videos/006_mustard_bottle_20200709_143211/dataset_cam.mp4" controls width="480"></video></td>
+    <td><img src="videos/006_mustard_bottle_20200709_143211/trajectory.gif" width="360"/></td>
+    <td><img src="videos/006_mustard_bottle_20200709_143211/dataset_cam.gif" width="360"/></td>
   </tr>
 </table>
 
