@@ -1,8 +1,17 @@
+# Usage (run from project root, activate object_traj venv first):
+#   source .venv/bin/activate
+#   python src/simulate/main.py --no-wandb --pos-only
+#   python src/simulate/main.py data/006_mustard_bottle_20200709_143211
+#   python src/simulate/main.py data/006_mustard_bottle_20200709_143211 --steps 20 --scale 2.0
+#   python src/simulate/main.py data/006_mustard_bottle_20200709_143211 --no-wandb
+#   python src/simulate/main.py data/006_mustard_bottle_20200709_143211 --pos-only
+#   python src/simulate/main.py data/006_mustard_bottle_20200709_143211 --video-dir videos --project my-project --name my-run
+
 import os
 import argparse
 from pathlib import Path
 
-os.environ.setdefault("MUJOCO_GL", "osmesa")
+os.environ.setdefault("MUJOCO_GL", "egl")
 
 import imageio
 import numpy as np
@@ -103,7 +112,7 @@ def _save(frames, video_dir, run_name, wandb_run):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("data_dir",    nargs="?", default="../006_mustard_bottle_20200709_143211")
+    parser.add_argument("data_dir",    nargs="?", default="data/006_mustard_bottle_20200709_143211")
     parser.add_argument("--scale",     type=float, default=1.5)
     parser.add_argument("--steps",     type=int,   default=10)
     parser.add_argument("--video-dir", default="../videos")

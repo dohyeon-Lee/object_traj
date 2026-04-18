@@ -17,4 +17,4 @@ dependencies = [
 
 [tool.uv]
 # robosuite pulls in mujoco; make sure MUJOCO_GL=egl on headless servers
-# Run: uv run python robosuite_eef_traj.py
+# Run: uv run python src/simulate/robosuite_eef_traj.py
