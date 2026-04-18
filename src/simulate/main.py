@@ -42,8 +42,15 @@ def load_traj(data_dir):
 
 
 def cam_to_robot(pos, quat):
-    """camera frame → robot frame"""
-    R = rot_matrix('y', -90) @ rot_matrix('x', 90)   # (3,3) numpy
+    """camera frame → robot frame
+    Assumption: camera faces robot scene head-on
+      cam +Z (forward) → robot -X
+      cam +Y (down)    → robot -Z
+      cam +X (right)   → robot +Y  (derived by right-hand rule)
+    """
+    R = np.array([[ 0,  0, -1],
+                  [ 1,  0,  0],
+                  [ 0, -1,  0]], dtype=float)
     rot = Rotation.from_matrix(R)
     return (R @ pos.T).T, (rot * Rotation.from_quat(quat)).as_quat()
 
@@ -113,7 +120,7 @@ def _save(frames, video_dir, run_name, wandb_run):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("data_dir",    nargs="?", default="data/006_mustard_bottle_20200709_143211")
-    parser.add_argument("--scale",     type=float, default=1.5)
+    parser.add_argument("--scale",     type=float, default=1)
     parser.add_argument("--steps",     type=int,   default=10)
     parser.add_argument("--video-dir", default="../videos")
     parser.add_argument("--project",   default="robosuite-eef-traj")
