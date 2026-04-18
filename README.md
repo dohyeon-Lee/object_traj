@@ -4,8 +4,8 @@
 
 <table>
   <tr>
-    <td align="center"><b>데모영상</b></td>
-    <td align="center"><b>로봇 tracking영상</b></td>
+    <td align="center"><b>Demo</b></td>
+    <td align="center"><b>Robot Tracking (same viewpoint)</b></td>
   </tr>
   <tr>
     <td><video src="videos/006_mustard_bottle_20200709_143211/trajectory.mp4" controls width="480"></video></td>
