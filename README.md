@@ -1,5 +1,18 @@
 # object_traj
 
+### The "dataset_cam" view shows the robot arm following the trajectory from the same viewpoint as the camera in the dataset
+
+<table>
+  <tr>
+    <td align="center"><b>데모영상</b></td>
+    <td align="center"><b>로봇 tracking영상</b></td>
+  </tr>
+  <tr>
+    <td><video src="videos/006_mustard_bottle_20200709_143211/trajectory.mp4" controls width="480"></video></td>
+    <td><video src="videos/006_mustard_bottle_20200709_143211/dataset_cam.mp4" controls width="480"></video></td>
+  </tr>
+</table>
+
 ## Setup
 
 ```bash

@@ -10,7 +10,7 @@ wheels/
 .venv
 
 # generated outputs
-videos/
+# videos/
 
 # wandb local logs
 wandb/
