@@ -51,6 +51,8 @@ python src/main.py data/011_banana_20200709_145401 --steps 20 --scale 2.0
 python src/main.py data/011_banana_20200709_145401 --video-dir videos --project my-project --name my-run
 ```
 
-Output: `videos/<run_name>/{frontview,birdview,sideview,dataset_cam}.mp4`
+Output:
+- `videos/<run_name>/{frontview,birdview,sideview,dataset_cam}.mp4` — simulation camera views
+- `videos/<run_name>/trajectory.mp4` — original dataset frames with projected object trajectory overlaid
 
-`dataset_cam` is rendered from the same point of view as the camera used to record the original dataset.
+`dataset_cam.mp4` is rendered from the same point of view as the camera used to record the original dataset.
