@@ -9,6 +9,9 @@ import json
 import os
 from pathlib import Path
 
+# Project root = one level up from src/visualize_dataset.py
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 import cv2
 import imageio
 import numpy as np
@@ -102,7 +105,9 @@ def draw_trajectory(images, poses_cam, K, color, radius=6, trail_len=None):
 
 def make_video(data_dir, fps=10):
     data_dir = Path(data_dir)
-    out_dir = Path("videos") / data_dir.name
+    if not data_dir.is_absolute():
+        data_dir = PROJECT_ROOT / data_dir
+    out_dir = PROJECT_ROOT / "videos" / data_dir.name
     out_dir.mkdir(parents=True, exist_ok=True)
 
     poses, frames, images, K, E = load_data(data_dir)

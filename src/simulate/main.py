@@ -12,6 +12,9 @@ import argparse
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+# Project root = two levels up from src/simulate/main.py
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 os.environ.setdefault("MUJOCO_GL", "egl")
 
 import imageio
@@ -31,9 +34,12 @@ CAM_H, CAM_W = 480, 640
 # cam +Z (forward) → robot -X
 # cam +Y (down)    → robot -Z
 # cam +X (right)   → robot +Y
-CAM_TO_ROBOT_R = np.array([[ 0,  0, -1],
-                             [ 1,  0,  0],
-                             [ 0, -1,  0]], dtype=float)
+DATASET_CAM_FRAME_IN_ROBOT = np.array( [[ 0,  0, -1],
+                                        [ 1,  0,  0],
+                                        [ 0, -1,  0]], dtype=float)
+
+KP_POS = 5.0   # proportional gain for position error (m → action)
+KP_ROT = 2.0   # proportional gain for rotation error (rad → action)
 
 
 # ── data ──────────────────────────────────────────────────────────────────────
@@ -46,8 +52,8 @@ def load_traj(data_dir):
     return pos, quat
 
 
-def cam_to_robot(pos, quat, R=CAM_TO_ROBOT_R):
-    """camera frame → robot frame using R (default: CAM_TO_ROBOT_R)"""
+def cam_to_robot(pos, quat, R=DATASET_CAM_FRAME_IN_ROBOT):
+    """camera frame → robot frame using R (default: DATASET_CAM_FRAME_IN_ROBOT)"""
     rot = Rotation.from_matrix(R)
     return (R @ pos.T).T, (rot * Rotation.from_quat(quat)).as_quat()
 
@@ -60,7 +66,7 @@ def remap(pos, quat, center=(0.0, 0.0, 1.0), scale=1.0):
 
 # ── dataset camera pose ───────────────────────────────────────────────────────
 
-def compute_dataset_cam(pos_cam_raw, scale, center=(0.0, 0.0, 1.0), R=CAM_TO_ROBOT_R):
+def compute_dataset_cam(pos_cam_raw, scale, center=(0.0, 0.0, 1.0), R=DATASET_CAM_FRAME_IN_ROBOT):
     """Compute dataset camera position and MuJoCo quaternion in robot frame.
 
     The camera origin (0,0,0 in cam frame) undergoes the same remap as the
@@ -77,10 +83,10 @@ def compute_dataset_cam(pos_cam_raw, scale, center=(0.0, 0.0, 1.0), R=CAM_TO_ROB
     mean_raw = (R @ pos_cam_raw.T).T.mean(axis=0)
     cam_pos  = (np.zeros(3) - mean_raw) * scale + np.array(center)
 
-    R_cam = np.array([[0, 0, 1],
-                      [1, 0, 0],
-                      [0, 1, 0]], dtype=float)
-    qxyzw = Rotation.from_matrix(R_cam).as_quat()
+    dataset_cam_frame_to_mujoco_cam_frame = np.array([[0, 0, 1],
+                                                    [1, 0, 0],
+                                                    [0, 1, 0]], dtype=float)
+    qxyzw = Rotation.from_matrix(dataset_cam_frame_to_mujoco_cam_frame).as_quat()
     cam_quat_wxyz = np.array([qxyzw[3], qxyzw[0], qxyzw[1], qxyzw[2]])
     return cam_pos, cam_quat_wxyz
 
@@ -125,10 +131,10 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
         for _ in range(steps_per_waypoint):
 
             # ── OSC control: proportional delta toward target ──────────────
-            delta_pos = np.clip((tgt_pos - obs["robot0_eef_pos"]) * 5.0, -1, 1)
+            delta_pos = np.clip((tgt_pos - obs["robot0_eef_pos"]) * KP_POS, -1, 1)
             rot_target = Rotation.from_quat(fixed_quat if pos_only else tgt_quat)
             r_delta    = rot_target * Rotation.from_quat(obs["robot0_eef_quat"]).inv()
-            delta_rot  = np.clip(r_delta.as_rotvec() * 2.0, -1, 1)
+            delta_rot  = np.clip(r_delta.as_rotvec() * KP_ROT, -1, 1)
             action     = np.concatenate([delta_pos, delta_rot, [-1.0]])  # gripper open
             # ──────────────────────────────────────────────────────────────
 
@@ -170,7 +176,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("data_dir",    nargs="?", default="data/006_mustard_bottle_20200709_143211")
     parser.add_argument("--scale",     type=float, default=1)
-    parser.add_argument("--steps",     type=int,   default=10)
+    parser.add_argument("--steps",     type=int,   default=2)
     parser.add_argument("--video-dir", default="videos")
     parser.add_argument("--project",   default="robosuite-eef-traj")
     parser.add_argument("--name",      default=None)
@@ -179,13 +185,20 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     center    = (0.0, 0.0, 1.0)
-    run_name  = args.name or Path(args.data_dir).name
-    pos_cam, quat_cam = load_traj(args.data_dir)
+    data_dir  = Path(args.data_dir)
+    if not data_dir.is_absolute():
+        data_dir = PROJECT_ROOT / data_dir
+    run_name  = args.name or data_dir.name
+    pos_cam, quat_cam = load_traj(data_dir)
     pos, quat = cam_to_robot(pos_cam, quat_cam)
     pos, quat = remap(pos, quat, center=center, scale=args.scale)
 
+    video_dir = Path(args.video_dir)
+    if not video_dir.is_absolute():
+        video_dir = PROJECT_ROOT / video_dir
+
     wandb_run = None if args.no_wandb else wandb.init(project=args.project, name=run_name)
     run_sim(pos, quat, pos_cam, args.scale, center,
-            args.steps, args.video_dir, run_name, wandb_run, pos_only=args.pos_only)
+            args.steps, video_dir, run_name, wandb_run, pos_only=args.pos_only)
     if wandb_run:
         wandb_run.finish()

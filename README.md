@@ -8,8 +8,8 @@
     <td align="center"><b>Robot Tracking (same viewpoint)</b></td>
   </tr>
   <tr>
-    <td><img src="videos/006_mustard_bottle_20200709_143211/trajectory.gif" width="360"/></td>
-    <td><img src="videos/006_mustard_bottle_20200709_143211/dataset_cam.gif" width="360"/></td>
+    <td><img src="document/trajectory.gif" width="360"/></td>
+    <td><img src="document/dataset_cam.gif" width="360"/></td>
   </tr>
 </table>
 
@@ -46,8 +46,8 @@ and replays it in a robosuite (Panda) simulation using OSC control.
 Records video from three camera views (front, bird, side) and optionally logs to wandb.
 
 - `--pos-only`: follow position only, keep the arm's initial orientation (ignore object rotation)
-- `--scale`: scale factor for trajectory size in robot space (default: 1.5)
-- `--steps`: number of simulation steps per waypoint (default: 10)
+- `--scale`: scale factor for trajectory size in robot space (default: 1.0)
+- `--steps`: number of simulation steps per waypoint (default: 2, A lower steps leads to faster tracking, but larger error.)
 - `--no-wandb`: skip wandb logging
 
 ```bash
