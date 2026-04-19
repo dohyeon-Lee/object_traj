@@ -11,12 +11,13 @@ wheels/
 
 # generated outputs
 *.mp4
+*.png
 
 # wandb local logs
 wandb/
 
 # dataset (download separately)
-# 006_*/
+data/
 
 # logs
 *.log

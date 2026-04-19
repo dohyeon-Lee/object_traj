@@ -1,6 +1,6 @@
 # Usage:
 #   python document/mp4_to_gif.py dataset_cam.mp4                           
-#   python document/mp4_to_gif.py 006_mustard_bottle_20200709_143211/dataset_cam.mp4  
+#   python document/mp4_to_gif.py 011_banana_20200709_145401/dataset_cam.mp4  
 #   python document/mp4_to_gif.py videos/006_mustard_bottle_20200709_143211/dataset_cam.mp4 
 #   python document/mp4_to_gif.py clip.mp4 --width 360 --every 3 --colors 128
 #   python document/mp4_to_gif.py clip.mp4 --out custom_name.gif

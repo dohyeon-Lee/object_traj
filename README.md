@@ -1,7 +1,5 @@
 # object_traj
 
-### The "dataset_cam" view shows the robot arm following the trajectory from the same viewpoint as the camera in the dataset
-
 <table>
   <tr>
     <td align="center"><b>Demo</b></td>
@@ -39,7 +37,7 @@ python src/visualize_dataset.py data/006_mustard_bottle_20200709_143211 --fps 20
 
 ---
 
-## `src/simulate/main.py` — Robosuite Simulation
+## `src/main.py` — Robosuite Simulation
 
 Loads an object trajectory from a dataset, converts it from camera frame to robot frame,
 and replays it in a robosuite (Panda) simulation using OSC control.
@@ -51,10 +49,10 @@ Records video from three camera views (front, bird, side) and optionally logs to
 - `--no-wandb`: skip wandb logging
 
 ```bash
-python src/simulate/main.py --no-wandb --pos-only
-python src/simulate/main.py data/006_mustard_bottle_20200709_143211 --no-wandb
-python src/simulate/main.py data/006_mustard_bottle_20200709_143211 --steps 20 --scale 2.0
-python src/simulate/main.py data/006_mustard_bottle_20200709_143211 --video-dir videos --project my-project --name my-run
+python src/main.py --no-wandb --pos-only
+python src/main.py data/006_mustard_bottle_20200709_143211 --no-wandb
+python src/main.py data/006_mustard_bottle_20200709_143211 --steps 20 --scale 2.0
+python src/main.py data/006_mustard_bottle_20200709_143211 --video-dir videos --project my-project --name my-run
 ```
 
 Output: `videos/<run_name>/{frontview,birdview,sideview}.mp4`
