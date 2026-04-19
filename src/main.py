@@ -1,10 +1,9 @@
 # Usage (run from project root, activate object_traj venv first):
 #   source .venv/bin/activate
-#   python src/main.py --no-wandb --pos-only --show-eef
-#   python src/main.py data/006_mustard_bottle_20200709_143211
-#   python src/main.py data/006_mustard_bottle_20200709_143211 --steps 20 --scale 2.0
-#   python src/main.py data/006_mustard_bottle_20200709_143211 --no-wandb
-#   python src/main.py data/006_mustard_bottle_20200709_143211 --pos-only --no-wandb
+#   python src/main.py --no-wandb --show-eef
+#   python src/main.py data/011_banana_20200709_145401 --no-wandb
+#   python src/main.py data/011_banana_20200709_145401 --steps 20 --scale 2.0
+#   python src/main.py data/011_banana_20200709_145401 --angle 45 --no-wandb
 
 import os
 import argparse
@@ -107,7 +106,7 @@ def compute_dataset_cam(pos_cam_raw, scale, center=(0.0, 0.0, 1.0), R=DATASET_CA
 
 def run_sim(pos, quat, pos_cam_raw, scale, center,
             steps_per_waypoint, video_dir, run_name, wandb_run, R=DATASET_CAM_FRAME_IN_ROBOT,
-            pos_only=False, show_eef=False):
+            show_eef=False):
 
     cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R=R)
 
@@ -138,8 +137,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
 
     cam_mat    = {cam: get_cam_matrices(env, cam, CAM_H, CAM_W) for cam in CAMERAS + [DATASET_CAM]}
     frames     = {cam: [] for cam in CAMERAS + [DATASET_CAM]}
-    fixed_quat = obs["robot0_eef_quat"].copy()  # initial orientation, used when pos_only
-    rot_eef_init     = Rotation.from_quat(fixed_quat)
+    rot_eef_init      = Rotation.from_quat(obs["robot0_eef_quat"].copy())
     rot_dataset_first = Rotation.from_quat(quat[0])
     C_inv = rot_eef_init.inv() * rot_dataset_first  # corrects EEF frame → dataset object frame
     eef_history = []  # world-frame EEF positions for trail
@@ -148,12 +146,9 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
         for _ in range(steps_per_waypoint):
 
             # ── OSC control: proportional delta toward target ──────────────
-            delta_pos = np.clip((tgt_pos - obs["robot0_eef_pos"]) * KP_POS, -1, 1)
-            if pos_only:
-                rot_target = rot_eef_init
-            else:
-                # world-frame delta from dataset frame 0 → i, applied on top of EEF init
-                rot_target = Rotation.from_quat(tgt_quat) * rot_dataset_first.inv() * rot_eef_init
+            delta_pos  = np.clip((tgt_pos - obs["robot0_eef_pos"]) * KP_POS, -1, 1)
+            # world-frame delta from dataset frame 0 → i, applied on top of EEF init
+            rot_target = Rotation.from_quat(tgt_quat) * rot_dataset_first.inv() * rot_eef_init
             r_delta    = rot_target * Rotation.from_quat(obs["robot0_eef_quat"]).inv()
             delta_rot  = np.clip(r_delta.as_rotvec() * KP_ROT, -1, 1)
             action     = np.concatenate([delta_pos, delta_rot, [-1.0]])  # gripper open
@@ -206,7 +201,6 @@ if __name__ == "__main__":
     parser.add_argument("--project",   default="robosuite-eef-traj")
     parser.add_argument("--name",      default=None)
     parser.add_argument("--no-wandb",  action="store_true")
-    parser.add_argument("--pos-only",  action="store_true", help="follow position only, keep initial orientation")
     parser.add_argument("--show-eef",  action="store_true", help="overlay EEF trail and orientation axes on video")
     parser.add_argument("--angle",     type=float, default=0.0, help="horizontal camera angle in degrees (0=head-on, +90=right, -90=left)")
     args = parser.parse_args()
@@ -230,6 +224,6 @@ if __name__ == "__main__":
     wandb_run = None if args.no_wandb else wandb.init(project=args.project, name=run_name)
     run_sim(pos, quat, pos_cam, args.scale, center,
             args.steps, video_dir, run_name, wandb_run, R=R,
-            pos_only=args.pos_only, show_eef=args.show_eef)
+            show_eef=args.show_eef)
     if wandb_run:
         wandb_run.finish()

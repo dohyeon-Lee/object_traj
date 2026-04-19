@@ -17,7 +17,7 @@ wheels/
 wandb/
 
 # dataset (download separately)
-data/
+data/*/
 
 # logs
 *.log
