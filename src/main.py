@@ -1,9 +1,6 @@
 # Usage (run from project root, activate object_traj venv first):
 #   source .venv/bin/activate
-#   python src/main.py --no-wandb --show-eef
-#   python src/main.py data/011_banana_20200709_145401 --no-wandb
-#   python src/main.py data/011_banana_20200709_145401 --steps 20 --scale 2.0
-#   python src/main.py data/011_banana_20200709_145401 --angle 45 --no-wandb
+#   python src/main.py data/035_power_drill_20200709_151335 --no-wandb --show-eef --angle 45 --eef-dir +x
 
 import os
 import argparse
@@ -39,6 +36,14 @@ DATASET_CAM_FRAME_IN_ROBOT = np.array( [[ 0,  0, -1],
 
 KP_POS = 5.0   # proportional gain for position error (m → action)
 KP_ROT = 2.0   # proportional gain for rotation error (rad → action)
+
+# World-frame rotation applied to EEF init to orient the gripper at trajectory start.
+# Each entry rotates the default approach direction (-Z_robot) to the target direction.
+_EEF_DIR_ROT = {
+    'mz': Rotation.identity(),
+    'py': Rotation.from_euler('y',  90, degrees=True) * Rotation.from_euler('x',  90, degrees=True),
+    'my': Rotation.from_euler('y',  90, degrees=True) * Rotation.from_euler('x', -90, degrees=True),
+}
 
 
 def cam_to_robot_matrix(angle_deg: float, R0=DATASET_CAM_FRAME_IN_ROBOT) -> np.ndarray:
@@ -82,14 +87,6 @@ def compute_dataset_cam(pos_cam_raw, scale, center=(0.0, 0.0, 1.0), R=DATASET_CA
 
     The camera origin (0,0,0 in cam frame) undergoes the same remap as the
     trajectory points, telling us where the real camera sits in robot world.
-
-    MuJoCo camera convention: looks along -Z_cam, up is +Y_cam.
-    Dataset camera: looks along -X_robot, up is +Z_robot.
-    Rotation matrix (columns = cam axes in robot frame):
-        X_cam = +Y_robot = [0,1,0]
-        Y_cam = +Z_robot = [0,0,1]
-        Z_cam = +X_robot = [1,0,0]  (camera backward = +X, so forward = -X)
-    → quaternion [w,x,y,z] = [0.5, 0.5, 0.5, 0.5]
     """
     mean_raw = (R @ pos_cam_raw.T).T.mean(axis=0)
     cam_pos  = (np.zeros(3) - mean_raw) * scale + np.array(center)
@@ -105,11 +102,11 @@ def compute_dataset_cam(pos_cam_raw, scale, center=(0.0, 0.0, 1.0), R=DATASET_CA
 # ── simulation ────────────────────────────────────────────────────────────────
 
 def run_sim(pos, quat, pos_cam_raw, scale, center,
-            steps_per_waypoint, video_dir, run_name, wandb_run, R=DATASET_CAM_FRAME_IN_ROBOT,
-            angle=0.0, show_eef=False):
+            steps_per_waypoint, init_steps, video_dir, run_name, wandb_run, R=DATASET_CAM_FRAME_IN_ROBOT,
+            angle=0.0, eef_dir='-z', show_eef=False):
 
     cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R=R)
-    dataset_cam_key = f"dataset_cam_{angle:g}"
+    dataset_cam_key = f"dataset_cam_{angle:g}_{eef_dir}"
 
     # hard_reset=False: reset() calls sim.reset() only, not _load_model()/_initialize_sim()
     # This lets us inject a custom camera via _initialize_sim(new_xml) without it being overwritten.
@@ -118,7 +115,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
         controller_configs=load_composite_controller_config(robot="panda"),
         has_renderer=False, has_offscreen_renderer=True, use_camera_obs=True,
         camera_names=CAMERAS, camera_heights=CAM_H, camera_widths=CAM_W,
-        ignore_done=True, horizon=steps_per_waypoint * len(pos) + 100,
+        ignore_done=True, horizon=init_steps + steps_per_waypoint * (len(pos) - 1) + 100,
         hard_reset=False,
     )
 
@@ -140,18 +137,22 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     frames     = {cam: [] for cam in CAMERAS + [dataset_cam_key]}
     rot_eef_init      = Rotation.from_quat(obs["robot0_eef_quat"].copy())
     rot_dataset_first = Rotation.from_quat(quat[0])
-    C_inv = rot_eef_init.inv() * rot_dataset_first  # corrects EEF frame → dataset object frame
+    rot_first = _EEF_DIR_ROT[eef_dir] * rot_eef_init  # desired orientation at trajectory start
+    C_inv = rot_first.inv() * rot_dataset_first  # corrects EEF frame → dataset object frame
     eef_history = []  # world-frame EEF positions for trail
 
     for i, (tgt_pos, tgt_quat) in enumerate(zip(pos, quat)):
-        for _ in range(steps_per_waypoint):
+        steps = init_steps if i == 0 else steps_per_waypoint
+        for _ in range(steps):
 
             # ── OSC control: proportional delta toward target ──────────────
-            delta_pos  = np.clip((tgt_pos - obs["robot0_eef_pos"]) * KP_POS, -1, 1)
+            kp_pos = 1 if i == 0 else KP_POS
+            kp_rot = 1 if i == 0 else KP_ROT
+            delta_pos  = np.clip((tgt_pos - obs["robot0_eef_pos"]) * kp_pos, -1, 1)
             # world-frame delta from dataset frame 0 → i, applied on top of EEF init
-            rot_target = Rotation.from_quat(tgt_quat) * rot_dataset_first.inv() * rot_eef_init
+            rot_target = Rotation.from_quat(tgt_quat) * rot_dataset_first.inv() * rot_first
             r_delta    = rot_target * Rotation.from_quat(obs["robot0_eef_quat"]).inv()
-            delta_rot  = np.clip(r_delta.as_rotvec() * KP_ROT, -1, 1)
+            delta_rot  = np.clip(r_delta.as_rotvec() * kp_rot, -1, 1)
             action     = np.concatenate([delta_pos, delta_rot, [-1.0]])  # gripper open
             # ──────────────────────────────────────────────────────────────
 
@@ -196,14 +197,17 @@ def _save(frames, video_dir, run_name, wandb_run):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("data_dir",    nargs="?", default="data/006_mustard_bottle_20200709_143211")
-    parser.add_argument("--scale",     type=float, default=1)
-    parser.add_argument("--steps",     type=int,   default=2)
+    parser.add_argument("--scale",      type=float, default=1)
+    parser.add_argument("--steps",      type=int,   default=2)
+    parser.add_argument("--init-steps", type=int,   default=50, help="steps for the first waypoint to reach initial pose")
     parser.add_argument("--video-dir", default="videos")
     parser.add_argument("--project",   default="robosuite-eef-traj")
     parser.add_argument("--name",      default=None)
     parser.add_argument("--no-wandb",  action="store_true")
     parser.add_argument("--show-eef",  action="store_true", help="overlay EEF trail and orientation axes on video")
     parser.add_argument("--angle",     type=float, default=0.0, help="horizontal camera angle in degrees (0=head-on, +90=right, -90=left)")
+    parser.add_argument("--eef-dir",   default='mz', choices=['mz', 'py', 'my'],
+                        help="gripper approach direction at trajectory start in robot frame")
     args = parser.parse_args()
 
     center    = (0.0, 0.0, 1.0)
@@ -224,7 +228,7 @@ if __name__ == "__main__":
 
     wandb_run = None if args.no_wandb else wandb.init(project=args.project, name=run_name)
     run_sim(pos, quat, pos_cam, args.scale, center,
-            args.steps, video_dir, run_name, wandb_run, R=R,
-            angle=args.angle, show_eef=args.show_eef)
+            args.steps, args.init_steps, video_dir, run_name, wandb_run, R=R,
+            angle=args.angle, eef_dir=args.eef_dir, show_eef=args.show_eef)
     if wandb_run:
         wandb_run.finish()

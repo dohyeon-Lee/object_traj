@@ -39,6 +39,7 @@ Records video from multiple camera views (front, bird, side, dataset_cam) and op
 **Options:**
 - `--show-eef`: overlay EEF trail and orientation axes on all camera views
 - `--angle`: horizontal camera angle in degrees (0=head-on, +90=robot's right, -90=robot's left)
+- `--eef-dir`: initial gripper orientation of the end-effector (my=-y dir, mz=-z dir, py=+y dir)
 - `--scale`: scale factor for trajectory size in robot space (default: 1.0)
 - `--steps`: simulation steps per waypoint (default: 2; fewer steps = faster but larger error)
 - `--no-wandb`: skip wandb logging
@@ -46,7 +47,7 @@ Records video from multiple camera views (front, bird, side, dataset_cam) and op
 ```bash
 python src/main.py --no-wandb
 python src/main.py data/011_banana_20200709_145401 --no-wandb
-python src/main.py data/011_banana_20200709_145401 --angle 45 --show-eef --no-wandb
+python src/main.py data/011_banana_20200709_145401 --angle 45 --eef-dir my --show-eef --no-wandb
 python src/main.py data/011_banana_20200709_145401 --steps 20 --scale 2.0
 python src/main.py data/011_banana_20200709_145401 --video-dir videos --project my-project --name my-run
 ```
@@ -55,7 +56,7 @@ Output:
 - `videos/<run_name>/{frontview,birdview,sideview,dataset_cam}.mp4` — simulation camera views
 - `videos/<run_name>/trajectory.mp4` — original dataset frames with projected object trajectory overlaid
 
-`dataset_cam_<angle>.mp4` is rendered from the same point of view as the camera used to record the original dataset, rotated by `--angle` degrees around the robot.
+`dataset_cam_<angle>_<gripper>.mp4` is rendered from the same point of view as the camera used to record the original dataset, rotated by `--angle` degrees around the robot.
 
 ---
 
@@ -73,5 +74,22 @@ The `--angle` flag controls where the camera is placed relative to the robot. Be
     <td><img src="document/dataset_cam_-45.gif" width="240"/></td>
     <td><img src="document/dataset_cam_0.gif" width="240"/></td>
     <td><img src="document/dataset_cam_45.gif" width="240"/></td>
+  </tr>
+</table>
+
+## Gripper multi-pose Comparison
+
+The `--eef-dir` flag controls the initial gripper orientation of the end-effector:
+
+<table>
+  <tr>
+    <td align="center"><b>--eef-dir my</b></td>
+    <td align="center"><b>--eef-dir mz (default)</b></td>
+    <td align="center"><b>--eef-dir py</b></td>
+  </tr>
+  <tr>
+    <td><img src="document/dataset_cam_45_my.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_45_mz.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_45_py.gif" width="240"/></td>
   </tr>
 </table>
