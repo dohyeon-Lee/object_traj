@@ -7,7 +7,7 @@
   </tr>
   <tr>
     <td><img src="document/trajectory.gif" width="360"/></td>
-    <td><img src="document/dataset_cam.gif" width="360"/></td>
+    <td><img src="document/dataset_cam_45.gif" width="360"/></td>
   </tr>
 </table>
 
@@ -55,4 +55,23 @@ Output:
 - `videos/<run_name>/{frontview,birdview,sideview,dataset_cam}.mp4` — simulation camera views
 - `videos/<run_name>/trajectory.mp4` — original dataset frames with projected object trajectory overlaid
 
-`dataset_cam.mp4` is rendered from the same point of view as the camera used to record the original dataset.
+`dataset_cam_<angle>.mp4` is rendered from the same point of view as the camera used to record the original dataset, rotated by `--angle` degrees around the robot.
+
+---
+
+## Multi-angle Comparison
+
+The `--angle` flag controls where the camera is placed relative to the robot. Below are example results from three viewpoints:
+
+<table>
+  <tr>
+    <td align="center"><b>--angle -45</b></td>
+    <td align="center"><b>--angle 0</b></td>
+    <td align="center"><b>--angle 45</b></td>
+  </tr>
+  <tr>
+    <td><img src="document/dataset_cam_-45.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_0.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_45.gif" width="240"/></td>
+  </tr>
+</table>

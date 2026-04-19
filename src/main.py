@@ -106,9 +106,10 @@ def compute_dataset_cam(pos_cam_raw, scale, center=(0.0, 0.0, 1.0), R=DATASET_CA
 
 def run_sim(pos, quat, pos_cam_raw, scale, center,
             steps_per_waypoint, video_dir, run_name, wandb_run, R=DATASET_CAM_FRAME_IN_ROBOT,
-            show_eef=False):
+            angle=0.0, show_eef=False):
 
     cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R=R)
+    dataset_cam_key = f"dataset_cam_{angle:g}"
 
     # hard_reset=False: reset() calls sim.reset() only, not _load_model()/_initialize_sim()
     # This lets us inject a custom camera via _initialize_sim(new_xml) without it being overwritten.
@@ -136,7 +137,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     print(f"Dataset cam pos (robot frame): {cam_pos.round(3)}")
 
     cam_mat    = {cam: get_cam_matrices(env, cam, CAM_H, CAM_W) for cam in CAMERAS + [DATASET_CAM]}
-    frames     = {cam: [] for cam in CAMERAS + [DATASET_CAM]}
+    frames     = {cam: [] for cam in CAMERAS + [dataset_cam_key]}
     rot_eef_init      = Rotation.from_quat(obs["robot0_eef_quat"].copy())
     rot_dataset_first = Rotation.from_quat(quat[0])
     C_inv = rot_eef_init.inv() * rot_dataset_first  # corrects EEF frame → dataset object frame
@@ -170,7 +171,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
             if show_eef:
                 K, cp, cr = cam_mat[DATASET_CAM]
                 draw_eef(ds_img, eef_history, eef_quat_vis, K, cp, cr)
-            frames[DATASET_CAM].append(ds_img)
+            frames[dataset_cam_key].append(ds_img)
 
         print(f"[{i+1}/{len(pos)}] err={np.linalg.norm(obs['robot0_eef_pos'] - tgt_pos):.4f}")
 
@@ -224,6 +225,6 @@ if __name__ == "__main__":
     wandb_run = None if args.no_wandb else wandb.init(project=args.project, name=run_name)
     run_sim(pos, quat, pos_cam, args.scale, center,
             args.steps, video_dir, run_name, wandb_run, R=R,
-            show_eef=args.show_eef)
+            angle=args.angle, show_eef=args.show_eef)
     if wandb_run:
         wandb_run.finish()
