@@ -1,6 +1,8 @@
 # Usage (run from project root, activate object_traj venv first):
 #   source .venv/bin/activate
 #   python src/main.py data/035_power_drill_20200709_151335 --no-wandb --show-eef --angle 45 --eef-dir my
+#
+# Robot starts directly at the first trajectory pose via IK (no warm-up phase).
 
 import os
 import argparse
@@ -100,11 +102,69 @@ def compute_dataset_cam(pos_cam_raw, scale, center=(0.0, 0.0, 1.0), R=DATASET_CA
     return cam_pos, cam_quat_wxyz
 
 
+# ── mesh utils ────────────────────────────────────────────────────────────────
+
+def _clean_obj(src: Path, dst: Path):
+    """Strip vertex colors from OBJ (v x y z r g b → v x y z). Keeps UV coords."""
+    with open(src) as fin, open(dst, 'w') as fout:
+        for line in fin:
+            if line.startswith('v '):
+                parts = line.split()
+                fout.write(f"v {parts[1]} {parts[2]} {parts[3]}\n")
+            else:
+                fout.write(line)
+
+
+# ── IK ────────────────────────────────────────────────────────────────────────
+
+def solve_ik(env, target_pos, target_rot, n_iter=1000, tol=1e-4, damping=0.01, max_dq=0.2):
+    """Jacobian pseudo-inverse IK targeting the EEF body (consistent with obs eef_quat)."""
+    import mujoco
+    robot = env.robots[0]
+    m = getattr(env.sim.model, '_model', env.sim.model)
+    d = getattr(env.sim.data,  '_data',  env.sim.data)
+
+    # grip_site: center between fingers = obs["robot0_eef_pos"] source
+    site_id_raw = robot.eef_site_id
+    site_id = next(iter(site_id_raw.values())) if isinstance(site_id_raw, dict) else int(site_id_raw)
+
+    # eef body: orientation source = obs["robot0_eef_quat"] source
+    eef_name_raw  = robot.robot_model.eef_name
+    eef_body_name = next(iter(eef_name_raw.values())) if isinstance(eef_name_raw, dict) else eef_name_raw
+    body_id   = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, eef_body_name)
+
+    joint_ids = list(robot._ref_joint_pos_indexes)
+    nv        = m.nv
+    jacp      = np.zeros((3, nv))
+    jacr      = np.zeros((3, nv))
+    _dummy    = np.zeros((3, nv))
+    R_target  = target_rot.as_matrix()
+    err       = np.ones(6)
+
+    for _ in range(n_iter):
+        mujoco.mj_forward(m, d)
+        dp  = target_pos - d.site_xpos[site_id]
+        dR  = Rotation.from_matrix(R_target @ d.xmat[body_id].reshape(3, 3).T).as_rotvec()
+        err = np.concatenate([dp, dR])
+        if np.linalg.norm(err) < tol:
+            break
+        mujoco.mj_jacSite(m, d, jacp,   _dummy, site_id)  # position rows from grip_site
+        mujoco.mj_jacBody(m, d, _dummy, jacr,   body_id)  # rotation rows from eef body
+        J  = np.vstack([jacp, jacr])[:, joint_ids]
+        dq = J.T @ np.linalg.solve(J @ J.T + damping ** 2 * np.eye(6), err)
+        d.qpos[joint_ids] += np.clip(dq, -max_dq, max_dq)
+
+    d.qvel[:] = 0
+    mujoco.mj_forward(m, d)
+    print(f"IK residual: {np.linalg.norm(err):.5f}")
+
+
 # ── simulation ────────────────────────────────────────────────────────────────
 
 def run_sim(pos, quat, pos_cam_raw, scale, center,
-            steps_per_waypoint, init_steps, video_dir, run_name, wandb_run, R=DATASET_CAM_FRAME_IN_ROBOT,
-            angle=0.0, eef_dir='-z', show_eef=False, fovy=60.0, cam_h=480, cam_w=640):
+            steps_per_waypoint, video_dir, run_name, wandb_run, R=DATASET_CAM_FRAME_IN_ROBOT,
+            angle=0.0, eef_dir='mz', show_eef=False, fovy=60.0, cam_h=480, cam_w=640,
+            data_dir=None):
 
     cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R=R)
     dataset_cam_key = f"dataset_cam_{angle:g}_{eef_dir}"
@@ -116,48 +176,138 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
         controller_configs=load_composite_controller_config(robot="panda"),
         has_renderer=False, has_offscreen_renderer=True, use_camera_obs=True,
         camera_names=CAMERAS, camera_heights=cam_h, camera_widths=cam_w,
-        ignore_done=True, horizon=init_steps + steps_per_waypoint * (len(pos) - 1) + 100,
+        ignore_done=True, horizon=steps_per_waypoint * len(pos) + 100,
         hard_reset=False,
     )
 
-    # Inject dataset camera: parse current XML, add camera, recompile
+    # Inject dataset camera + object mesh: parse current XML, add elements, recompile
     xml  = env.model.get_xml()
     root = ET.fromstring(xml)
+
     ET.SubElement(root.find('worldbody'), 'camera', {
         'name': DATASET_CAM,
         'pos':  ' '.join(f"{v:.4f}" for v in cam_pos),
         'quat': ' '.join(f"{v:.6f}" for v in cam_quat),
         'fovy': f'{fovy:.4f}',
     })
+
+    if data_dir is not None:
+        mesh_dir  = Path(data_dir) / "mesh"
+        clean_obj = mesh_dir / "textured_simple_clean.obj"
+        if not clean_obj.exists():
+            _clean_obj(mesh_dir / "textured_simple.obj", clean_obj)
+        tex_file  = str(mesh_dir / "texture_map.png")
+        asset = root.find('asset')
+        if asset is None:
+            asset = ET.SubElement(root, 'asset')
+        ET.SubElement(asset, 'mesh',     {'name': 'obj_mesh', 'file': str(clean_obj)})
+        ET.SubElement(asset, 'texture',  {'name': 'obj_tex', 'type': '2d', 'file': tex_file})
+        ET.SubElement(asset, 'material', {'name': 'obj_mat', 'texture': 'obj_tex',
+                                          'texuniform': 'false', 'specular': '0.3'})
+        obj_quat_wxyz = [quat[0][3], quat[0][0], quat[0][1], quat[0][2]]
+        obj_body = ET.SubElement(root.find('worldbody'), 'body', {
+            'name': 'traj_object',
+            'pos': ' '.join(f'{v:.4f}' for v in pos[0]),
+            'quat': ' '.join(f'{v:.6f}' for v in obj_quat_wxyz),
+        })
+        ET.SubElement(obj_body, 'freejoint', {'name': 'traj_object_joint'})
+        ET.SubElement(obj_body, 'inertial', {
+            'pos': '0 0 0',
+            'mass': '0.1',
+            'diaginertia': '0.001 0.001 0.001',
+        })
+        ET.SubElement(obj_body, 'geom', {
+            'type': 'mesh', 'mesh': 'obj_mesh', 'material': 'obj_mat',
+            'group': '1', 'contype': '1', 'conaffinity': '1', 'friction': '2 0.05 0.01',
+        })
+
     env._initialize_sim(ET.tostring(root, encoding='unicode'))
 
     obs = env.reset()  # hard_reset=False → sim.reset() only, keeps our compiled model
     print(f"Dataset cam pos (robot frame): {cam_pos.round(3)}")
 
-    cam_mat    = {cam: get_cam_matrices(env, cam, cam_h, cam_w) for cam in CAMERAS + [DATASET_CAM]}
-    frames     = {cam: [] for cam in CAMERAS + [dataset_cam_key]}
     rot_eef_init      = Rotation.from_quat(obs["robot0_eef_quat"].copy())
     rot_dataset_first = Rotation.from_quat(quat[0])
-    rot_first = _EEF_DIR_ROT[eef_dir] * rot_eef_init  # desired orientation at trajectory start
-    C_inv = rot_first.inv() * rot_dataset_first  # corrects EEF frame → dataset object frame
-    eef_history = []  # world-frame EEF positions for trail
+    rot_first = _EEF_DIR_ROT[eef_dir] * rot_eef_init
+    C_inv     = rot_first.inv() * rot_dataset_first
+
+    solve_ik(env, pos[0], rot_first)
+    obs = env._get_observations()
+
+    # free-joint object handles (-1 if object not injected)
+    obj_body_id = -1
+    obj_qpos_adr = -1
+    obj_dof_adr = -1
+    if data_dir is not None:
+        import mujoco
+        m = getattr(env.sim.model, '_model', env.sim.model)
+        d = getattr(env.sim.data,  '_data',  env.sim.data)
+        obj_body_id  = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'traj_object')
+        obj_joint_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, 'traj_object_joint')
+        obj_qpos_adr = int(m.jnt_qposadr[obj_joint_id])
+        obj_dof_adr  = int(m.jnt_dofadr[obj_joint_id])
+        print(f"Object body_id={obj_body_id}  qpos_adr={obj_qpos_adr}  dof_adr={obj_dof_adr}  pos[0]={pos[0].round(3)}")
+
+    def _set_object_pose(p, q_xyzw):
+        import mujoco
+        if obj_qpos_adr < 0:
+            return
+        m = getattr(env.sim.model, '_model', env.sim.model)
+        d = getattr(env.sim.data,  '_data',  env.sim.data)
+        d.qpos[obj_qpos_adr:obj_qpos_adr + 3] = p
+        d.qpos[obj_qpos_adr + 3:obj_qpos_adr + 7] = [q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]]
+        d.qvel[obj_dof_adr:obj_dof_adr + 6] = 0
+        mujoco.mj_forward(m, d)
+    if obj_qpos_adr >= 0:
+        _set_object_pose(pos[0], quat[0])
+
+    # Phase 1: keep object fixed at first pose while gripper closes around it.
+    for _ in range(100):
+        if obj_qpos_adr >= 0:
+            _set_object_pose(pos[0], quat[0])
+        dp = np.clip((pos[0] - obs["robot0_eef_pos"]) * KP_POS, -1, 1)
+        dR = np.clip((rot_first * Rotation.from_quat(obs["robot0_eef_quat"]).inv()).as_rotvec() * KP_ROT, -1, 1)
+        obs, *_ = env.step(np.concatenate([dp, dR, [1.0]]))
+
+    rel_pos_in_eef = None
+    rel_rot = None
+    if obj_qpos_adr >= 0:
+        import mujoco
+        m = getattr(env.sim.model, '_model', env.sim.model)
+        d = getattr(env.sim.data,  '_data',  env.sim.data)
+        eef_name_raw  = env.robots[0].robot_model.eef_name
+        eef_body_name = next(iter(eef_name_raw.values())) if isinstance(eef_name_raw, dict) else eef_name_raw
+        eef_body_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, eef_body_name)
+
+        eef_pos = d.xpos[eef_body_id].copy()
+        eef_rot = Rotation.from_matrix(d.xmat[eef_body_id].reshape(3, 3))
+        obj_pos = d.xpos[obj_body_id].copy()
+        obj_quat_wxyz = d.xquat[obj_body_id].copy()
+        obj_rot = Rotation.from_quat([obj_quat_wxyz[1], obj_quat_wxyz[2], obj_quat_wxyz[3], obj_quat_wxyz[0]])
+        rel_pos_in_eef = eef_rot.inv().apply(obj_pos - eef_pos)
+        rel_rot = eef_rot.inv() * obj_rot
+
+    cam_mat     = {cam: get_cam_matrices(env, cam, cam_h, cam_w) for cam in CAMERAS + [DATASET_CAM]}
+    frames      = {cam: [] for cam in CAMERAS + [dataset_cam_key]}
+    eef_history = []
 
     for i, (tgt_pos, tgt_quat) in enumerate(zip(pos, quat)):
-        steps = init_steps if i == 0 else steps_per_waypoint
-        for _ in range(steps):
-
-            # ── OSC control: proportional delta toward target ──────────────
-            kp_pos = 1 if i == 0 else KP_POS
-            kp_rot = 1 if i == 0 else KP_ROT
-            delta_pos  = np.clip((tgt_pos - obs["robot0_eef_pos"]) * kp_pos, -1, 1)
-            # world-frame delta from dataset frame 0 → i, applied on top of EEF init
+        for _ in range(steps_per_waypoint):
+            delta_pos  = np.clip((tgt_pos - obs["robot0_eef_pos"]) * KP_POS, -1, 1)
             rot_target = Rotation.from_quat(tgt_quat) * rot_dataset_first.inv() * rot_first
             r_delta    = rot_target * Rotation.from_quat(obs["robot0_eef_quat"]).inv()
-            delta_rot  = np.clip(r_delta.as_rotvec() * kp_rot, -1, 1)
-            action     = np.concatenate([delta_pos, delta_rot, [-1.0]])  # gripper open
-            # ──────────────────────────────────────────────────────────────
+            delta_rot  = np.clip(r_delta.as_rotvec() * KP_ROT, -1, 1)
+            action     = np.concatenate([delta_pos, delta_rot, [1.0]])
 
             obs, *_ = env.step(action)
+
+            # Phase 2: after grasp, carry object with EEF using fixed relative transform.
+            if obj_qpos_adr >= 0:
+                eef_now = Rotation.from_quat(obs["robot0_eef_quat"])
+                obj_pos_now = obs["robot0_eef_pos"] + eef_now.apply(rel_pos_in_eef)
+                obj_quat_now = (eef_now * rel_rot).as_quat()
+                _set_object_pose(obj_pos_now, obj_quat_now)
+
             eef_history.append(obs["robot0_eef_pos"].copy())
 
             eef_quat_vis = (Rotation.from_quat(obs["robot0_eef_quat"]) * C_inv).as_quat()
@@ -200,7 +350,6 @@ if __name__ == "__main__":
     parser.add_argument("data_dir",    nargs="?", default="data/006_mustard_bottle_20200709_143211")
     parser.add_argument("--scale",      type=float, default=1)
     parser.add_argument("--steps",      type=int,   default=2)
-    parser.add_argument("--init-steps", type=int,   default=50, help="steps for the first waypoint to reach initial pose")
     parser.add_argument("--video-dir", default="videos")
     parser.add_argument("--project",   default="robosuite-eef-traj")
     parser.add_argument("--name",      default=None)
@@ -235,8 +384,8 @@ if __name__ == "__main__":
 
     wandb_run = None if args.no_wandb else wandb.init(project=args.project, name=run_name)
     run_sim(pos, quat, pos_cam, args.scale, center,
-            args.steps, args.init_steps, video_dir, run_name, wandb_run, R=R,
+            args.steps, video_dir, run_name, wandb_run, R=R,
             angle=args.angle, eef_dir=args.eef_dir, show_eef=args.show_eef,
-            fovy=fovy, cam_h=cam_h, cam_w=cam_w)
+            fovy=fovy, cam_h=cam_h, cam_w=cam_w, data_dir=data_dir)
     if wandb_run:
         wandb_run.finish()
