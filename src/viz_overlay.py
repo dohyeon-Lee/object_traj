@@ -1,9 +1,12 @@
 import json
+import xml.etree.ElementTree as ET
 import cv2
 import imageio
 import numpy as np
 from pathlib import Path
 
+
+# ── camera utils ──────────────────────────────────────────────────────────────
 
 def get_cam_matrices(env, camera_name, height, width):
     cam_id  = env.sim.model.camera_name2id(camera_name)
@@ -26,6 +29,8 @@ def project(points_world, K, cam_pos, cam_rot, img_height):
     return px, in_front
 
 
+# ── overlay drawing ───────────────────────────────────────────────────────────
+
 def draw_axes(img, K, cam_pos, cam_rot, origin, length=0.1, name=None):
     """Draw XYZ axes at a world-frame origin onto img (in-place)."""
     H, W = img.shape[:2]
@@ -46,41 +51,33 @@ def draw_axes(img, K, cam_pos, cam_rot, origin, length=0.1, name=None):
         cv2.putText(img, name, (p0[0]+4, p0[1]-4),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,0,0), 1, cv2.LINE_AA)
 
-    for axis, color, label in zip(
-        [1,2,3], [(255,0,0),(0,255,0),(0,0,255)], ["+X","+Y","+Z"]
-    ):
+    for axis, color in zip([1,2,3], [(255,0,0),(0,255,0),(0,0,255)]):
         if valid[axis] and ok(px[axis]):
-            p1 = tuple(px[axis].astype(int))
-            cv2.arrowedLine(img, p0, p1, color, 2, tipLength=0.25, line_type=cv2.LINE_AA)
-
+            cv2.arrowedLine(img, p0, tuple(px[axis].astype(int)),
+                            color, 2, tipLength=0.25, line_type=cv2.LINE_AA)
     return img
 
 
 def draw_eef(img, eef_positions, eef_quat, K, cam_pos, cam_rot,
              trail_len=40, dot_radius=6, axis_length=0.05):
-    """Draw EEF trail, current dot, and orientation axes onto img (in-place).
-
-    eef_positions: list of (3,) world-frame positions (history so far)
-    eef_quat:      (4,) xyzw quaternion of current EEF orientation
-    """
+    """Draw EEF trail, current dot, and orientation axes onto img (in-place)."""
     from scipy.spatial.transform import Rotation
     H, W = img.shape[:2]
 
     def ok(p):
         return 0 <= p[0] < W and 0 <= p[1] < H
 
-    # ── trail + dot ───────────────────────────────────────────────────────────
     trail = eef_positions[-trail_len:]
     px_trail, valid_trail = project(trail, K, cam_pos, cam_rot, H)
 
     for k in range(1, len(trail)):
-        if valid_trail[k - 1] and valid_trail[k]:
-            p0 = tuple(px_trail[k - 1].astype(int))
+        if valid_trail[k-1] and valid_trail[k]:
+            p0 = tuple(px_trail[k-1].astype(int))
             p1 = tuple(px_trail[k].astype(int))
             if ok(p0) and ok(p1):
                 alpha = k / len(trail)
-                color = tuple(int(c * alpha) for c in (0, 220, 255))
-                cv2.line(img, p0, p1, color, 2, cv2.LINE_AA)
+                cv2.line(img, p0, p1,
+                         tuple(int(c * alpha) for c in (0, 220, 255)), 2, cv2.LINE_AA)
 
     if valid_trail[-1]:
         dot = tuple(px_trail[-1].astype(int))
@@ -88,24 +85,91 @@ def draw_eef(img, eef_positions, eef_quat, K, cam_pos, cam_rot,
             cv2.circle(img, dot, dot_radius,     (0, 220, 255), -1, cv2.LINE_AA)
             cv2.circle(img, dot, dot_radius + 2, (255, 255, 255),  1, cv2.LINE_AA)
 
-    # ── orientation axes ──────────────────────────────────────────────────────
-    eef_pos = np.array(eef_positions[-1])
-    R_eef   = Rotation.from_quat(eef_quat).as_matrix()
-
+    eef_pos  = np.array(eef_positions[-1])
+    R_eef    = Rotation.from_quat(eef_quat).as_matrix()
     axis_pts = np.array([eef_pos] + [eef_pos + R_eef[:, i] * axis_length for i in range(3)])
     px_ax, valid_ax = project(axis_pts, K, cam_pos, cam_rot, H)
 
-    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
-    labels = ["+X", "+Y", "+Z"]
     if valid_ax[0] and ok(tuple(px_ax[0].astype(int))):
         p0 = tuple(px_ax[0].astype(int))
-        for i, (color, label) in enumerate(zip(colors, labels)):
-            if valid_ax[i + 1]:
-                p1 = tuple(px_ax[i + 1].astype(int))
-                if ok(p1):
-                    cv2.arrowedLine(img, p0, p1, color, 2, tipLength=0.25, line_type=cv2.LINE_AA)
-
+        for i, color in enumerate([(255,0,0),(0,255,0),(0,0,255)]):
+            if valid_ax[i+1] and ok(tuple(px_ax[i+1].astype(int))):
+                cv2.arrowedLine(img, p0, tuple(px_ax[i+1].astype(int)),
+                                color, 2, tipLength=0.25, line_type=cv2.LINE_AA)
     return img
+
+
+# ── object mesh + attachment ──────────────────────────────────────────────────
+
+def prepare_mesh(src, dst):
+    """Strip vertex colors (v x y z r g b → v x y z) so MuJoCo can parse the OBJ."""
+    with open(src) as fin, open(dst, 'w') as fout:
+        for line in fin:
+            if line.startswith('v '):
+                parts = line.split()
+                fout.write(f"v {parts[1]} {parts[2]} {parts[3]}\n")
+            else:
+                fout.write(line)
+
+
+def inject_object_xml(root, data_dir):
+    """Add textured mesh assets and a mocap body to an MJCF XML tree (in-place)."""
+    data_dir  = Path(data_dir)
+    mesh_dir  = data_dir / "mesh"
+    clean_obj = mesh_dir / "textured_simple_clean.obj"
+    if not clean_obj.exists():
+        prepare_mesh(mesh_dir / "textured_simple.obj", clean_obj)
+
+    asset = root.find('asset') or ET.SubElement(root, 'asset')
+    ET.SubElement(asset, 'mesh',     {'name': 'obj_mesh', 'file': str(clean_obj)})
+    ET.SubElement(asset, 'texture',  {'name': 'obj_tex',  'type': '2d',
+                                      'file': str(mesh_dir / 'texture_map.png')})
+    ET.SubElement(asset, 'material', {'name': 'obj_mat', 'texture': 'obj_tex',
+                                      'texuniform': 'false', 'specular': '0.3'})
+
+    body = ET.SubElement(root.find('worldbody'), 'body',
+                         {'name': 'traj_object', 'mocap': 'true',
+                          'pos': '0 0 0', 'quat': '1 0 0 0'})
+    ET.SubElement(body, 'geom', {'type': 'mesh', 'mesh': 'obj_mesh',
+                                 'material': 'obj_mat', 'group': '1',
+                                 'contype': '0', 'conaffinity': '0'})
+
+
+def make_object_updater(env, quat0_xyzw):
+    """Return an update() callable that rigidly attaches 'traj_object' to the EEF.
+
+    After IK the grip_site coincides with pos[0], so the object center tracks
+    the grip_site and the orientation follows the EEF body with a fixed offset
+    computed from the dataset's first-frame quaternion quat0_xyzw (xyzw).
+    """
+    import mujoco
+    from scipy.spatial.transform import Rotation
+
+    m = getattr(env.sim.model, "_model", env.sim.model)
+    d = getattr(env.sim.data,  "_data",  env.sim.data)
+
+    robot = env.robots[0]
+    site_id_raw   = robot.eef_site_id
+    site_id       = next(iter(site_id_raw.values())) if isinstance(site_id_raw, dict) else int(site_id_raw)
+    eef_name_raw  = robot.robot_model.eef_name
+    eef_body_name = next(iter(eef_name_raw.values())) if isinstance(eef_name_raw, dict) else eef_name_raw
+    eef_body_id   = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, eef_body_name)
+
+    obj_body_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'traj_object')
+    mocap_idx   = int(m.body_mocapid[obj_body_id])
+
+    rel_rot = (Rotation.from_matrix(d.xmat[eef_body_id].reshape(3, 3)).inv()
+               * Rotation.from_quat(quat0_xyzw))
+
+    def update():
+        eef_rot   = Rotation.from_matrix(d.xmat[eef_body_id].reshape(3, 3))
+        world_pos = d.site_xpos[site_id].copy()
+        q         = (eef_rot * rel_rot).as_quat()
+        d.mocap_pos[mocap_idx]  = world_pos
+        d.mocap_quat[mocap_idx] = [q[3], q[0], q[1], q[2]]
+        mujoco.mj_forward(m, d)
+
+    return update
 
 
 # ── dataset trajectory video ──────────────────────────────────────────────────
@@ -141,9 +205,9 @@ def _draw_object_axes(img, pose_cam, K, length=0.05):
     H, W = img.shape[:2]
     def ok(p): return 0 <= p[0] < W and 0 <= p[1] < H
     for j, c in enumerate([(255, 50, 50), (50, 255, 50), (50, 50, 255)]):
-        if ok(px[0]) and ok(px[j + 1]):
-            cv2.arrowedLine(img, tuple(px[0]), tuple(px[j + 1]), c, 2,
-                            tipLength=0.3, line_type=cv2.LINE_AA)
+        if ok(px[0]) and ok(px[j+1]):
+            cv2.arrowedLine(img, tuple(px[0]), tuple(px[j+1]),
+                            c, 2, tipLength=0.3, line_type=cv2.LINE_AA)
     return img
 
 
@@ -158,12 +222,12 @@ def _draw_trajectory(images, poses_cam, K, color, radius=6, trail_len=20):
         H, W  = frame.shape[:2]
         start = max(0, i - trail_len)
         trail = [(int(pixels[j, 0]), int(pixels[j, 1]))
-                 for j in range(start, i + 1)
+                 for j in range(start, i+1)
                  if 0 <= pixels[j, 0] < W and 0 <= pixels[j, 1] < H]
         for k in range(1, len(trail)):
             alpha = k / len(trail)
-            c = tuple(int(x * alpha) for x in color)
-            cv2.line(frame, trail[k - 1], trail[k], c, 2, cv2.LINE_AA)
+            cv2.line(frame, trail[k-1], trail[k],
+                     tuple(int(x * alpha) for x in color), 2, cv2.LINE_AA)
         u, v = pixels[i]
         if 0 <= u < W and 0 <= v < H:
             cv2.circle(frame, (int(u), int(v)), radius,     color,           -1, cv2.LINE_AA)

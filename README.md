@@ -7,7 +7,7 @@
   </tr>
   <tr>
     <td><img src="document/trajectory.gif" width="360"/></td>
-    <td><img src="document/dataset_cam_45.gif" width="360"/></td>
+    <td><img src="document/dataset_cam_50_py.gif" width="360"/></td>
   </tr>
 </table>
 
