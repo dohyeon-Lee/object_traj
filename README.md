@@ -73,7 +73,7 @@ The `--angle` flag controls where the camera is placed relative to the robot. Be
   <tr>
     <td><img src="document/dataset_cam_-50_py.gif" width="240"/></td>
     <td><img src="document/dataset_cam_0_py.gif" width="240"/></td>
-    <td><img src="document/dataset_cam_50_py.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_50_py_m.gif" width="240"/></td>
   </tr>
 </table>
 
