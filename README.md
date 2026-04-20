@@ -7,7 +7,7 @@
   </tr>
   <tr>
     <td><img src="document/trajectory.gif" width="360"/></td>
-    <td><img src="document/dataset_cam_50_py.gif" width="360"/></td>
+    <td><img src="document/dataset_cam_50_py_origin.gif" width="360"/></td>
   </tr>
 </table>
 
@@ -66,14 +66,14 @@ The `--angle` flag controls where the camera is placed relative to the robot. Be
 
 <table>
   <tr>
-    <td align="center"><b>--angle -45</b></td>
+    <td align="center"><b>--angle -50</b></td>
     <td align="center"><b>--angle 0</b></td>
-    <td align="center"><b>--angle 45</b></td>
+    <td align="center"><b>--angle 50</b></td>
   </tr>
   <tr>
-    <td><img src="document/dataset_cam_-45.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_-50.gif" width="240"/></td>
     <td><img src="document/dataset_cam_0.gif" width="240"/></td>
-    <td><img src="document/dataset_cam_45.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_50.gif" width="240"/></td>
   </tr>
 </table>
 
@@ -88,8 +88,25 @@ The `--eef-dir` flag controls the initial gripper orientation of the end-effecto
     <td align="center"><b>--eef-dir py</b></td>
   </tr>
   <tr>
-    <td><img src="document/dataset_cam_45_my.gif" width="240"/></td>
-    <td><img src="document/dataset_cam_45_mz.gif" width="240"/></td>
-    <td><img src="document/dataset_cam_45_py.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_50_my.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_50_mz.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_50_py.gif" width="240"/></td>
+  </tr>
+</table>
+
+`--eef-dir` also provides a gripper orientation control function based on spherical coordinates. The direction the gripper fingers point can be specified using latitude and longitude in spherical coordinates. After setting the latitude and longitude, the yaw rotation can also be specified.
+
+<table>
+  <tr>
+    <td align="center"><b>--eef-dir SPH_lat150lon0z0</b></td>
+    <td align="center"><b>--eef-dir SPH_lat150lon30z0</b></td>
+    <td align="center"><b>--eef-dir SPH_lat180lon0z0</b></td>
+    <td align="center"><b>--eef-dir SPH_lat180lon0z90</b></td>
+  </tr>
+  <tr>
+    <td><img src="document/dataset_cam_50_SPH_lat150lon0z0.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_50_SPH_lat150lon30z0.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_50_SPH_lat180lon0z0.gif" width="240"/></td>
+    <td><img src="document/dataset_cam_50_SPH_lat180lon0z90.gif" width="240"/></td>
   </tr>
 </table>

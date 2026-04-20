@@ -261,7 +261,7 @@ if __name__ == "__main__":
     parser.add_argument("--show-eef",  action="store_true")
     parser.add_argument("--angle",     type=float, default=0.0)
     parser.add_argument("--eef-dir",   default='mz',
-                        help="gripper approach: 'mz'/'py'/'my', 'REL_r90p-20y45' (intrinsic), or 'ABS_r90p-20y45' (extrinsic)")
+                        help="gripper approach: 'mz'/'py'/'my' or 'SPH_lat<a>lon<b>[z<c>]' (e.g. 'SPH_lat180lon0' for top-down)")
     args = parser.parse_args()
 
     center   = (0.0, 0.0, 1.0)
