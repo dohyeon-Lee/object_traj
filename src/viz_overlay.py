@@ -52,13 +52,6 @@ def draw_axes(img, K, cam_pos, cam_rot, origin, length=0.1, name=None):
         if valid[axis] and ok(px[axis]):
             p1 = tuple(px[axis].astype(int))
             cv2.arrowedLine(img, p0, p1, color, 2, tipLength=0.25, line_type=cv2.LINE_AA)
-            # offset label in the arrow direction so it doesn't overlap the tip
-            direction = px[axis] - px[0]
-            norm = np.linalg.norm(direction)
-            offset = (direction / norm * 14).astype(int) if norm > 0 else np.array([8, -8])
-            lpos = tuple((px[axis].astype(int) + offset))
-            cv2.putText(img, label, lpos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 2, cv2.LINE_AA)
-            cv2.putText(img, label, lpos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
     return img
 
@@ -111,12 +104,6 @@ def draw_eef(img, eef_positions, eef_quat, K, cam_pos, cam_rot,
                 p1 = tuple(px_ax[i + 1].astype(int))
                 if ok(p1):
                     cv2.arrowedLine(img, p0, p1, color, 2, tipLength=0.25, line_type=cv2.LINE_AA)
-                    direction = px_ax[i + 1] - px_ax[0]
-                    norm = np.linalg.norm(direction)
-                    offset = (direction / norm * 14).astype(int) if norm > 0 else np.array([8, -8])
-                    lpos = tuple(px_ax[i + 1].astype(int) + offset)
-                    cv2.putText(img, label, lpos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 2, cv2.LINE_AA)
-                    cv2.putText(img, label, lpos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, color,            1, cv2.LINE_AA)
 
     return img
 

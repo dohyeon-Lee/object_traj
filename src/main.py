@@ -12,6 +12,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 os.environ.setdefault("MUJOCO_GL", "egl")
 
+import json
+import math
 import imageio
 import numpy as np
 import wandb
@@ -23,7 +25,6 @@ from viz_overlay import get_cam_matrices, draw_eef, make_video
 
 CAMERAS     = ["frontview", "birdview", "sideview"]
 DATASET_CAM = "dataset_cam"
-CAM_H, CAM_W = 480, 640
 
 # Camera-to-robot rotation matrix (empirically verified).
 # Assumption: dataset camera faces the robot head-on in simulation (+X direction).
@@ -103,7 +104,7 @@ def compute_dataset_cam(pos_cam_raw, scale, center=(0.0, 0.0, 1.0), R=DATASET_CA
 
 def run_sim(pos, quat, pos_cam_raw, scale, center,
             steps_per_waypoint, init_steps, video_dir, run_name, wandb_run, R=DATASET_CAM_FRAME_IN_ROBOT,
-            angle=0.0, eef_dir='-z', show_eef=False):
+            angle=0.0, eef_dir='-z', show_eef=False, fovy=60.0, cam_h=480, cam_w=640):
 
     cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R=R)
     dataset_cam_key = f"dataset_cam_{angle:g}_{eef_dir}"
@@ -114,7 +115,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
         env_name="Lift", robots="Panda",
         controller_configs=load_composite_controller_config(robot="panda"),
         has_renderer=False, has_offscreen_renderer=True, use_camera_obs=True,
-        camera_names=CAMERAS, camera_heights=CAM_H, camera_widths=CAM_W,
+        camera_names=CAMERAS, camera_heights=cam_h, camera_widths=cam_w,
         ignore_done=True, horizon=init_steps + steps_per_waypoint * (len(pos) - 1) + 100,
         hard_reset=False,
     )
@@ -126,14 +127,14 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
         'name': DATASET_CAM,
         'pos':  ' '.join(f"{v:.4f}" for v in cam_pos),
         'quat': ' '.join(f"{v:.6f}" for v in cam_quat),
-        'fovy': '60',
+        'fovy': f'{fovy:.4f}',
     })
     env._initialize_sim(ET.tostring(root, encoding='unicode'))
 
     obs = env.reset()  # hard_reset=False → sim.reset() only, keeps our compiled model
     print(f"Dataset cam pos (robot frame): {cam_pos.round(3)}")
 
-    cam_mat    = {cam: get_cam_matrices(env, cam, CAM_H, CAM_W) for cam in CAMERAS + [DATASET_CAM]}
+    cam_mat    = {cam: get_cam_matrices(env, cam, cam_h, cam_w) for cam in CAMERAS + [DATASET_CAM]}
     frames     = {cam: [] for cam in CAMERAS + [dataset_cam_key]}
     rot_eef_init      = Rotation.from_quat(obs["robot0_eef_quat"].copy())
     rot_dataset_first = Rotation.from_quat(quat[0])
@@ -168,7 +169,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
                 frames[cam].append(img)
 
             # Render dataset camera manually (not in robosuite obs pipeline)
-            ds_img = env.sim.render(CAM_W, CAM_H, camera_name=DATASET_CAM)[::-1].copy()
+            ds_img = env.sim.render(cam_w, cam_h, camera_name=DATASET_CAM)[::-1].copy()
             if show_eef:
                 K, cp, cr = cam_mat[DATASET_CAM]
                 draw_eef(ds_img, eef_history, eef_quat_vis, K, cp, cr)
@@ -224,11 +225,18 @@ if __name__ == "__main__":
     if not video_dir.is_absolute():
         video_dir = PROJECT_ROOT / video_dir
 
+    cam_json = json.load(open(data_dir / "camera.json"))
+    fy    = cam_json["intrinsics"][1][1]
+    cam_h = cam_json["height"]
+    cam_w = cam_json["width"]
+    fovy  = math.degrees(2 * math.atan(cam_h / (2 * fy)))
+
     make_video(data_dir)
 
     wandb_run = None if args.no_wandb else wandb.init(project=args.project, name=run_name)
     run_sim(pos, quat, pos_cam, args.scale, center,
             args.steps, args.init_steps, video_dir, run_name, wandb_run, R=R,
-            angle=args.angle, eef_dir=args.eef_dir, show_eef=args.show_eef)
+            angle=args.angle, eef_dir=args.eef_dir, show_eef=args.show_eef,
+            fovy=fovy, cam_h=cam_h, cam_w=cam_w)
     if wandb_run:
         wandb_run.finish()
