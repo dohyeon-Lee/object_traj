@@ -13,9 +13,26 @@
 
 ## Setup
 
+### Option 1: `uv`
+
 ```bash
 uv sync
 source .venv/bin/activate
+```
+
+### Option 2: `conda`
+
+```bash
+conda env create -f environment.yml
+conda activate object-traj
+```
+
+Both setups install the project from [pyproject.toml](/data2/dohyeon/object_traj/pyproject.toml), so the Python dependencies stay aligned between `uv` and `conda`.
+
+If you are running on a headless server, set:
+
+```bash
+export MUJOCO_GL=egl
 ```
 
 Place dataset folders inside `data/`:
