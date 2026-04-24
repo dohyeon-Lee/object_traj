@@ -1,6 +1,6 @@
 # Usage (run from project root, activate object_traj venv first):
 #   source .venv/bin/activate
-#   python src/main.py data/035_power_drill_20200709_151335 --no-wandb --show-eef --angle 45 --eef-dir my
+#   python src/main.py data/011_banana_20200709_145401 --no-wandb --show-eef --angle 45 --eef-dir my
 
 import os
 import argparse
