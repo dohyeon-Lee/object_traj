@@ -60,6 +60,7 @@ Records video from multiple camera views (front, bird, side, dataset_cam) and op
 - `--scale`: scale factor for trajectory size in robot space (default: 1.0)
 - `--steps`: simulation steps per waypoint (default: 2; fewer steps = faster but larger error)
 - `--no-wandb`: skip wandb logging
+- `--ref-dir`: reference dataset directory that defines the canonical mesh orientation (see below)
 
 ```bash
 python src/main.py --no-wandb
@@ -72,6 +73,27 @@ python src/main.py data/011_banana_20200709_145401 --video-dir videos --project 
 Output:
 - `videos/<run_name>/{frontview,birdview,sideview,dataset_cam}.mp4` — simulation camera views
 - `videos/<run_name>/trajectory.mp4` — original dataset frames with projected object trajectory overlaid
+- `videos/<run_name>/traj_cam.png` — per-frame x/y/z/roll/pitch/yaw in camera frame
+- `videos/<run_name>/traj_robot.png` — per-frame x/y/z/roll/pitch/yaw in robot frame (after cam→robot + remap)
+
+### Mesh orientation correction (`--ref-dir`)
+
+Different pose estimators define the object coordinate frame differently relative to the mesh `.obj` file.
+When a pose estimator's canonical frame does not match the `.obj` coordinate system, the object mesh in the simulation appears rotated incorrectly even though the trajectory motion is correct.
+
+`--ref-dir` fixes this by computing the rotation offset between the reference estimator (e.g. `ours`) and the current estimator at frame 0, then applying the inverse offset to the mesh placement:
+
+```
+R_body_offset = R_ref_cam(frame0).T @ R_cur_cam(frame0)
+quat0_mesh    = quat[0] * R_body_offset⁻¹
+```
+
+This assumes the reference estimator's canonical frame matches the `.obj` coordinate system (i.e. the mesh looks correct without `--ref-dir`).
+
+```bash
+# freepose with mesh orientation corrected to match ours
+python src/main.py data/freepose --ref-dir data/ours --angle 45 --eef-dir my --no-wandb
+```
 
 `dataset_cam_<angle>_<gripper>.mp4` is rendered from the same point of view as the camera used to record the original dataset, rotated by `--angle` degrees around the robot.
 

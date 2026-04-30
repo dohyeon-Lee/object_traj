@@ -1,6 +1,6 @@
 # Usage (run from project root, activate object_traj venv first):
 #   source .venv/bin/activate
-#   python src/main.py data/011_banana_20200709_145401 --no-wandb --show-eef --angle 45 --eef-dir my
+#   python src/main.py data/freepose --no-wandb --show-eef --angle 45 --eef-dir my
 
 import os
 import argparse
@@ -17,6 +17,9 @@ import imageio
 import numpy as np
 import wandb
 import robosuite as suite
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation
 
 try:
@@ -158,7 +161,8 @@ def solve_ik(env, target_pos, target_rot, n_iter=1000, tol=1e-4, damping=0.01, m
 def run_sim(pos, quat, pos_cam_raw, scale, center,
             steps_per_waypoint, video_dir, run_name, wandb_run,
             R=DATASET_CAM_FRAME_IN_ROBOT, angle=0.0, eef_dir='mz',
-            show_eef=False, fovy=60.0, cam_h=480, cam_w=640, data_dir=None):
+            show_eef=False, fovy=60.0, cam_h=480, cam_w=640, data_dir=None,
+            mesh_rot_offset=None):
 
     cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R)
     dataset_cam_key   = f"dataset_cam_{angle:g}_{eef_dir}"
@@ -196,7 +200,10 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     obs = env._get_observations()
 
     # Rigidly attach object to EEF (grip_site == pos[0] after IK converges)
-    update_object = make_object_updater(env, quat[0]) if data_dir is not None else None
+    quat0_mesh = quat[0]
+    if mesh_rot_offset is not None:
+        quat0_mesh = (Rotation.from_quat(quat[0]) * mesh_rot_offset.inv()).as_quat()
+    update_object = make_object_updater(env, quat0_mesh) if data_dir is not None else None
     if update_object:
         update_object()
 
@@ -247,6 +254,39 @@ def _save(frames, video_dir, run_name, wandb_run):
             wandb_run.log({f"video/{cam}": wandb.Video(path, fps=20, format="mp4")})
 
 
+def plot_traj(pos_cam, quat_cam, pos_robot, quat_robot, video_dir, run_name):
+    """Save two 6-panel trajectory plots (camera frame and robot frame)."""
+    out_dir = Path(video_dir) / run_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    t          = np.arange(len(pos_cam))
+    rpy_cam    = Rotation.from_quat(quat_cam).as_euler('xyz', degrees=True)
+    rpy_robot  = Rotation.from_quat(quat_robot).as_euler('xyz', degrees=True)
+
+    datasets = [
+        ("Camera Frame (original)",         pos_cam,   rpy_cam,   "traj_cam.png"),
+        ("Robot Frame (cam→robot + remap)",  pos_robot, rpy_robot, "traj_robot.png"),
+    ]
+    dim_labels = ['x', 'y', 'z', 'roll', 'pitch', 'yaw']
+    units      = ['m'] * 3 + ['deg'] * 3
+    colors     = ['#e74c3c', '#2ecc71', '#3498db', '#e67e22', '#9b59b6', '#1abc9c']
+
+    for title, pos, rpy, fname in datasets:
+        data = np.concatenate([pos, rpy], axis=1)   # (N, 6)
+        fig, axes = plt.subplots(6, 1, figsize=(12, 10), sharex=True)
+        fig.suptitle(title, fontsize=13, fontweight='bold')
+        for ax, d, label, unit, color in zip(axes, data.T, dim_labels, units, colors):
+            ax.plot(t, d, color=color, linewidth=1.2)
+            ax.set_ylabel(f'{label} ({unit})', fontsize=9)
+            ax.grid(True, alpha=0.3)
+        axes[-1].set_xlabel('frame index')
+        fig.tight_layout()
+        path = str(out_dir / fname)
+        fig.savefig(path, dpi=120, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Saved plot  -> {path}")
+
+
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -262,6 +302,8 @@ if __name__ == "__main__":
     parser.add_argument("--angle",     type=float, default=0.0)
     parser.add_argument("--eef-dir",   default='mz',
                         help="gripper approach: 'mz'/'py'/'my' or 'SPH_lat<a>lon<b>[z<c>]' (e.g. 'SPH_lat180lon0' for top-down)")
+    parser.add_argument("--ref-dir",   default=None,
+                        help="reference data dir (e.g. data/ours) whose frame 0 defines the canonical mesh orientation")
     args = parser.parse_args()
 
     center   = (0.0, 0.0, 1.0)
@@ -285,11 +327,23 @@ if __name__ == "__main__":
     fovy     = math.degrees(2 * math.atan(cam_h / (2 * cam_json["intrinsics"][1][1])))
 
     make_video(data_dir)
+    plot_traj(pos_cam, quat_cam, pos, quat, video_dir, run_name)
+
+    # mesh orientation correction: align frame-0 body frame to reference canonical pose
+    mesh_rot_offset = None
+    if args.ref_dir is not None:
+        ref_dir = Path(args.ref_dir)
+        if not ref_dir.is_absolute():
+            ref_dir = PROJECT_ROOT / ref_dir
+        R_ref  = np.load(ref_dir  / "object_pose" / "poses.npz")["poses"][0, :3, :3].astype(float)
+        R_cur  = np.load(data_dir / "object_pose" / "poses.npz")["poses"][0, :3, :3].astype(float)
+        mesh_rot_offset = Rotation.from_matrix(R_ref.T @ R_cur)
 
     wandb_run = None if args.no_wandb else wandb.init(project=args.project, name=run_name)
     run_sim(pos, quat, pos_cam, args.scale, center,
             args.steps, video_dir, run_name, wandb_run, R=R,
             angle=args.angle, eef_dir=args.eef_dir, show_eef=args.show_eef,
-            fovy=fovy, cam_h=cam_h, cam_w=cam_w, data_dir=data_dir)
+            fovy=fovy, cam_h=cam_h, cam_w=cam_w, data_dir=data_dir,
+            mesh_rot_offset=mesh_rot_offset)
     if wandb_run:
         wandb_run.finish()
