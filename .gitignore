@@ -21,3 +21,6 @@ data/*/
 
 # logs
 *.log
+
+# logs
+droid/

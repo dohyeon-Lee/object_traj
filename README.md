@@ -16,7 +16,8 @@
 ### Option 1: `uv`
 
 ```bash
-uv sync
+ # uv sync
+SETUPTOOLS_USE_DISTUTILS=local uv sync
 source .venv/bin/activate
 ```
 
@@ -28,6 +29,26 @@ conda activate object-traj
 ```
 
 Both setups install the project from [pyproject.toml](/data2/dohyeon/object_traj/pyproject.toml), so the Python dependencies stay aligned between `uv` and `conda`.
+
+### Setup for Franka deployment
+
+After activate conda env (object-traj),
+
+pyzed
+```bash
+cd "/usr/local/zed/"
+python3 get_python_api.py 
+```
+
+droid 
+```bash
+cd droid 
+pip install -e .
+```
+
+```bash
+pip install "numpy<2"
+```
 
 If you are running on a headless server, set:
 

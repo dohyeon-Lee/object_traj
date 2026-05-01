@@ -1,6 +1,7 @@
 # Usage (run from project root, activate object_traj venv first):
 #   source .venv/bin/activate
 #   python src/main.py data/freepose --no-wandb --show-eef --angle 45 --eef-dir my
+#   python simulation/main.py data/006_mustard_bottle_20200709_143211 --no-wandb --show-eef --angle 45 --eef-dir py
 
 import os
 import argparse
