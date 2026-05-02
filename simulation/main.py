@@ -1,7 +1,7 @@
 # Usage (run from project root, activate object_traj venv first):
 #   source .venv/bin/activate
 #   python src/main.py data/freepose --no-wandb --show-eef --angle 45 --eef-dir my
-#   python simulation/main.py data/006_mustard_bottle_20200709_143211 --no-wandb --show-eef --angle 45 --eef-dir py
+#   python simulation/main.py data/035_power_drill_20200709_151335 --no-wandb --show-eef --angle 45 --eef-dir mz
 
 import os
 import argparse
@@ -33,7 +33,7 @@ except Exception:
         return load_controller_config(default_controller="OSC_POSE")
 
 from viz_overlay import (get_cam_matrices, draw_eef,
-                         inject_object_xml, make_object_updater, make_video)
+                        inject_object_xml, make_object_updater, make_video)
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
@@ -42,11 +42,23 @@ DATASET_CAM = "dataset_cam"
 
 # cam +Z (optical) = robot -X,  cam +Y (down) = robot -Z,  cam +X (right) = robot +Y
 DATASET_CAM_FRAME_IN_ROBOT = np.array([[0, 0, -1],
-                                       [1, 0,  0],
-                                       [0, -1, 0]], dtype=float)
+                                        [1, 0,  0],
+                                        [0, -1, 0]], dtype=float)
 
 KP_POS = 5.0
 KP_ROT = 2.0
+
+DROID_INIT_QPOS = np.array([0, -np.pi / 5, 0, -4 * np.pi / 5, 0, 3 * np.pi / 5, 0.0])
+HAND_JOINT_Z_OFFSET = Rotation.from_euler('z', -np.pi / 4)
+
+def _set_droid_init_qpos(env):
+    import mujoco
+    robot = env.robots[0]
+    env.sim.data.qpos[robot._ref_joint_pos_indexes] = DROID_INIT_QPOS
+    env.sim.data.qvel[robot._ref_joint_vel_indexes] = 0
+    m = getattr(env.sim.model, '_model', env.sim.model)
+    d = getattr(env.sim.data, '_data', env.sim.data)
+    mujoco.mj_forward(m, d)
 
 _EEF_DIR_ROT = {
     'mz': Rotation.identity(),
@@ -189,17 +201,23 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     if data_dir is not None:
         inject_object_xml(root, data_dir)
     env._initialize_sim(ET.tostring(root, encoding='unicode'))
-    obs = env.reset()
+    env.reset()
+    _set_droid_init_qpos(env)
+    obs = env._get_observations()
+
+    # Read EEF state directly from MuJoCo (obs may be stale after _set_droid_init_qpos)
+    _eef_body_name = next(iter(env.robots[0].robot_model.eef_name.values())) if isinstance(env.robots[0].robot_model.eef_name, dict) else env.robots[0].robot_model.eef_name
+    _body_id = env.sim.model.body_name2id(_eef_body_name)
 
     # Orient gripper to match trajectory start, then IK to first waypoint
-    rot_eef_init      = Rotation.from_quat(obs["robot0_eef_quat"].copy())
+    rot_eef_init      = Rotation.from_matrix(env.sim.data.body_xmat[_body_id].reshape(3, 3))
     rot_dataset_first = Rotation.from_quat(quat[0])
     rot_first = _parse_eef_dir(eef_dir) * rot_eef_init
     C_inv     = rot_first.inv() * rot_dataset_first
 
     solve_ik(env, pos[0], rot_first)
     obs = env._get_observations()
-
+    
     # Rigidly attach object to EEF (grip_site == pos[0] after IK converges)
     quat0_mesh = quat[0]
     if mesh_rot_offset is not None:
@@ -249,7 +267,7 @@ def _save(frames, video_dir, run_name, wandb_run):
     for cam, cam_frames in frames.items():
         path = str(out_dir / f"{cam}.mp4")
         imageio.mimwrite(path, cam_frames, fps=20, codec="libx264",
-                         output_params=["-crf", "18"])
+                        output_params=["-crf", "18"])
         print(f"Saved {cam} -> {path}")
         if wandb_run:
             wandb_run.log({f"video/{cam}": wandb.Video(path, fps=20, format="mp4")})
@@ -292,22 +310,38 @@ def plot_traj(pos_cam, quat_cam, pos_robot, quat_robot, video_dir, run_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("data_dir",    nargs="?", default="data/006_mustard_bottle_20200709_143211")
+    parser.add_argument("data_dir",    nargs="?", default="data/035_power_drill_20200709_151335")
     parser.add_argument("--scale",     type=float, default=1)
     parser.add_argument("--steps",     type=int,   default=2)
     parser.add_argument("--video-dir", default="videos")
     parser.add_argument("--project",   default="robosuite-eef-traj")
     parser.add_argument("--name",      default=None)
-    parser.add_argument("--no-wandb",  action="store_true")
+    parser.add_argument("--wandb",     action="store_true")
     parser.add_argument("--show-eef",  action="store_true")
-    parser.add_argument("--angle",     type=float, default=0.0)
+    parser.add_argument("--angle",     type=float, default=45)
     parser.add_argument("--eef-dir",   default='mz',
                         help="gripper approach: 'mz'/'py'/'my' or 'SPH_lat<a>lon<b>[z<c>]' (e.g. 'SPH_lat180lon0' for top-down)")
     parser.add_argument("--ref-dir",   default=None,
                         help="reference data dir (e.g. data/ours) whose frame 0 defines the canonical mesh orientation")
     args = parser.parse_args()
 
-    center   = (0.0, 0.0, 1.0)
+    _tmp_env = suite.make(
+        env_name="Lift", robots="Panda", controller_configs=_load_ctrl_cfg(),
+        has_renderer=False, has_offscreen_renderer=True,
+        use_camera_obs=False, horizon=10,
+    )
+    _tmp_env.reset()
+    _set_droid_init_qpos(_tmp_env)
+    _tmp_robot = _tmp_env.robots[0]
+    _tmp_site_id = next(iter(_tmp_robot.eef_site_id.values())) if isinstance(_tmp_robot.eef_site_id, dict) else int(_tmp_robot.eef_site_id)
+    center = tuple(_tmp_env.sim.data.site_xpos[_tmp_site_id].copy())
+    # _init_img = _tmp_env.sim.render(640, 480, camera_name="sideview")[::-1]
+    # imageio.imwrite(str(PROJECT_ROOT / "init_pose_sideview.png"), _init_img)
+    # print(f"Saved initial pose image -> {PROJECT_ROOT / 'init_pose_sideview.png'}")
+    _tmp_env.close()
+    
+    center = tuple(np.array(center) + np.array([-0.1, 0.0, 0.1]))    
+    
     data_dir = Path(args.data_dir)
     if not data_dir.is_absolute():
         data_dir = PROJECT_ROOT / data_dir
@@ -340,7 +374,7 @@ if __name__ == "__main__":
         R_cur  = np.load(data_dir / "object_pose" / "poses.npz")["poses"][0, :3, :3].astype(float)
         mesh_rot_offset = Rotation.from_matrix(R_ref.T @ R_cur)
 
-    wandb_run = None if args.no_wandb else wandb.init(project=args.project, name=run_name)
+    wandb_run = wandb.init(project=args.project, name=run_name) if args.wandb else None
     run_sim(pos, quat, pos_cam, args.scale, center,
             args.steps, video_dir, run_name, wandb_run, R=R,
             angle=args.angle, eef_dir=args.eef_dir, show_eef=args.show_eef,
