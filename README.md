@@ -158,7 +158,6 @@ python simulation/main_abs.py data/freepose --ref-dir data/ours --angle 45 --eef
 Loads the same trajectory and replays it on a physical Franka Panda via DROID's `RobotEnv`.
 Reads shared parameters (`data_dir`, `angle`, `scale`, `eef_dir`, `center_offset`) from `config.yml`.
 
-Orientation is sent as **XYZ Euler angles in radians** (DROID's `cartesian_position` convention).
 TCP offset (`tcp_offset`) accounts for the distance from the flange to the Robotiq85 gripper tip.
 
 ```bash
