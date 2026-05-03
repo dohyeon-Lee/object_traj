@@ -4,13 +4,13 @@ data_dir: data/035_power_drill_20200709_151335         # dataset to use (relativ
 
 angle: 90                    # camera-to-robot rotation (degrees)
 scale: 1.0                   # trajectory scale factor
-eef_dir: mz                  # gripper approach direction: mz / py / my / SPH_lat<a>lon<b>
-center_offset: [-0.1, 0.0, 0.1]  # offset added to EEF initial position (meters, robot frame)
+eef_dir: SPH_lat150lon0z0                  # gripper approach direction: mz / py / my / SPH_lat<a>lon<b>z<c>
+center_offset: [0.0, 0.0, 0.0]  # offset added to EEF initial position (meters, robot frame)
 
 # Simulation-specific (simulation/main_abs.py)
 steps: 2                     # MuJoCo steps per trajectory waypoint
 control_freq: 10             # OSC control frequency (Hz)
-show_eef: false              # overlay EEF trail and axes on rendered frames
+show_eef: true              # overlay EEF trail and axes on rendered frames
 
 # Deploy-specific (deploy_franka/main.py)
 tcp_offset: 0.145            # flange to gripper tip along flange Z (meters, Robotiq85)

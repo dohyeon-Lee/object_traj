@@ -6,6 +6,7 @@ import re
 import json
 import numpy as np
 import imageio
+import cv2
 import argparse
 from pathlib import Path
 from scipy.spatial.transform import Rotation
@@ -130,7 +131,6 @@ if __name__ == "__main__":
 
     # set the initial pose to the center of the trajectory
     center = tuple(tip_pos)
-    # center = tuple(np.array(center) + np.array([0.1, 0, -0.05]))
     center = tuple(np.array(center) + np.array(cfg.get("center_offset", [-0.1, 0.0, 0.1])))
     
     data_dir = Path(args.data_dir)
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     data_name = Path(args.data_dir).name if Path(args.data_dir).name else data_dir.name
     video_dir = PROJECT_ROOT / "videos" / data_name
     video_dir.mkdir(parents=True, exist_ok=True)
-    video_path = video_dir / "deploy_video.mp4"
+    video_path = video_dir / f"deploy_video_{int(args.angle)}_{args.eef_dir}.mp4"
     writer = imageio.get_writer(
         str(video_path), fps=10, codec="libx264", pixelformat="yuv420p",
     ) if varied_cam_key else None
@@ -188,7 +188,9 @@ if __name__ == "__main__":
         frame_obs = env.get_observation()
         frame = frame_obs["image"][varied_cam_key]
         if frame.ndim == 3 and frame.shape[2] == 4:
-            frame = frame[:, :, :3]
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
+        else:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_pil = Image.fromarray(frame).resize((vid_w, vid_h))
         writer.append_data(np.array(frame_pil))
 
@@ -198,29 +200,41 @@ if __name__ == "__main__":
     run(env, pose.tolist(), step=100, grip_close=False)
     print("pose[0]:", pose)
 
-    # --- camera preview: check view before starting ---
+    # --- Step 1: camera preview ---
     import threading
     preview_path = Path(__file__).parent / "camera_preview.png"
     if varied_cam_key:
         print(f"\n=== Camera Preview ===")
         print(f"Live view: {preview_path}")
-        print(f"Press Enter to start trajectory execution...\n")
+        print(f"Press Enter to close gripper...\n")
         stop_preview = threading.Event()
         def _wait_enter():
             input()
             stop_preview.set()
         threading.Thread(target=_wait_enter, daemon=True).start()
+        first_frame = True
         while not stop_preview.is_set():
             prev_obs = env.get_observation()
             frame = prev_obs["image"][varied_cam_key]
+            if first_frame:
+                print(f"  frame shape={frame.shape}, dtype={frame.dtype}, strides={frame.strides}, contiguous={frame.flags['C_CONTIGUOUS']}")
+                first_frame = False
             if frame.ndim == 3 and frame.shape[2] == 4:
-                frame = frame[:, :, :3]
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
+            else:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             Image.fromarray(frame).resize((vid_w, vid_h)).save(preview_path)
             time.sleep(0.5)
-        print("Starting trajectory execution...")
     else:
-        input("Press Enter to start trajectory execution...")
+        input("Press Enter to close gripper...")
 
+    # --- Step 2: close gripper ---
+    print("Closing gripper...")
+    run(env, np.concatenate([flange_pos0, rot_first_vec]).tolist(), step=10, grip_close=True)
+    print("Gripper closed. Press Enter to start trajectory...")
+    input()
+
+    # --- Step 3: trajectory loop ---
     _grab_frame()
 
     for i in range(len(pos)):
@@ -229,7 +243,7 @@ if __name__ == "__main__":
         flange_pos_i, _ = tcp_to_flange(pos[i], rot_target_vec, tcp_d)
         pose = np.concatenate([flange_pos_i, rot_target_vec])
         print(pose)
-        run(env, pose.tolist(), step=1, grip_close=False)
+        run(env, pose.tolist(), step=1, grip_close=True)
         _grab_frame()
 
     if writer:
