@@ -9,8 +9,15 @@ import imageio
 import argparse
 from pathlib import Path
 from scipy.spatial.transform import Rotation
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+def _load_config():
+    path = PROJECT_ROOT / "config.yml"
+    if path.exists():
+        return yaml.safe_load(path.read_text()) or {}
+    return {}
 DATASET_CAM_FRAME_IN_ROBOT = np.array([[0, 0, -1],
                                     [1, 0,  0],
                                     [0, -1, 0]], dtype=float)
@@ -53,15 +60,15 @@ def cam_to_robot_matrix(angle_deg, R0=DATASET_CAM_FRAME_IN_ROBOT):
 def cam_to_robot(pos, quat, R):
     return (R @ pos.T).T, (Rotation.from_matrix(R) * Rotation.from_quat(quat)).as_quat()
 
-def tcp_to_flange(pos, rotvec, d):
+def tcp_to_flange(pos, euler_xyz, d):
     """Gripper-tip pose -> flange pose (subtract offset along flange Z)."""
-    R = Rotation.from_rotvec(rotvec).as_matrix()
-    return pos - d * R[:, 2], rotvec
+    R = Rotation.from_euler("xyz", euler_xyz).as_matrix()
+    return pos - d * R[:, 2], euler_xyz
 
-def flange_to_tcp(pos, rotvec, d):
+def flange_to_tcp(pos, euler_xyz, d):
     """Flange pose -> gripper-tip pose (add offset along flange Z)."""
-    R = Rotation.from_rotvec(rotvec).as_matrix()
-    return pos + d * R[:, 2], rotvec
+    R = Rotation.from_euler("xyz", euler_xyz).as_matrix()
+    return pos + d * R[:, 2], euler_xyz
 
 def remap(pos, quat, center=(0.0, 0.0, 1.0), scale=1.0):
     return (pos - pos.mean(axis=0)) * scale + np.array(center), quat
@@ -83,20 +90,17 @@ def run(env, pose6, step=1, grip_close=False, hz=10):
     for _ in range(step):
         env.step(action)
         time.sleep(1.0 / hz)
-    
-    # for _ in range(int(duration * hz)):
-    #     env.step(action)
-    #     time.sleep(1.0 / hz)
 
 
 if __name__ == "__main__":
+    cfg = _load_config()
     parser = argparse.ArgumentParser()
-    parser.add_argument("data_dir",    nargs="?", default="data/035_power_drill_20200709_151335")
-    parser.add_argument("--angle",     type=float, default=90)
-    parser.add_argument("--scale",     type=float, default=1)
-    parser.add_argument("--eef-dir",   default='mz',
+    parser.add_argument("data_dir",    nargs="?", default=cfg.get("data_dir", "data/035_power_drill_20200709_151335"))
+    parser.add_argument("--angle",     type=float, default=cfg.get("angle", 90))
+    parser.add_argument("--scale",     type=float, default=cfg.get("scale", 1))
+    parser.add_argument("--eef-dir",   default=cfg.get("eef_dir", "mz"),
                         help="gripper approach: 'mz'/'py'/'my' or 'SPH_lat<a>lon<b>[z<c>]' (e.g. 'SPH_lat180lon0' for top-down)")
-    parser.add_argument("--tcp-offset", type=float, default=0.097,
+    parser.add_argument("--tcp-offset", type=float, default=cfg.get("tcp_offset", 0.145),
                         help="distance from flange to gripper tip along flange Z (meters)")
     args = parser.parse_args()
     
@@ -104,8 +108,6 @@ if __name__ == "__main__":
     gripper_action_space = "position"
 
     camera_kwargs = dict(
-        # hand_camera=dict(image=True, concatenate_images=False, resolution=(imsize, imsize), resize_func="cv2"),
-        # varied_camera=dict(image=True, concatenate_images=False, resolution=(imsize, imsize), resize_func="cv2"),
         hand_camera=dict(image=True, concatenate_images=False, resize_func="cv2"),
         varied_camera=dict(image=True, concatenate_images=False, resize_func="cv2"),
     )
@@ -129,7 +131,7 @@ if __name__ == "__main__":
     # set the initial pose to the center of the trajectory
     center = tuple(tip_pos)
     # center = tuple(np.array(center) + np.array([0.1, 0, -0.05]))
-    center = tuple(np.array(center) + np.array([-0.1, 0.0, 0.1]))  
+    center = tuple(np.array(center) + np.array(cfg.get("center_offset", [-0.1, 0.0, 0.1])))
     
     data_dir = Path(args.data_dir)
     if not data_dir.is_absolute():
@@ -139,11 +141,11 @@ if __name__ == "__main__":
     pos, quat = cam_to_robot(pos_cam, quat_cam, R)
     pos, quat = remap(pos, quat, center=center, scale=args.scale)
 
-    rot_eef_init      = Rotation.from_rotvec(initial_pose[3:])
+    rot_eef_init      = Rotation.from_euler("xyz", initial_pose[3:])
 
     rot_dataset_first = Rotation.from_quat(quat[0])
     rot_first = _parse_eef_dir(args.eef_dir) * rot_eef_init
-    rot_first_vec = rot_first.as_rotvec()
+    rot_first_vec = rot_first.as_euler("xyz")
 
     # --- video recording setup (varied camera, dataset resolution) ---
     cam_json_path = data_dir / "camera.json"
@@ -223,7 +225,7 @@ if __name__ == "__main__":
 
     for i in range(len(pos)):
         rot_target = Rotation.from_quat(quat[i]) * rot_dataset_first.inv() * rot_first
-        rot_target_vec = rot_target.as_rotvec()
+        rot_target_vec = rot_target.as_euler("xyz")
         flange_pos_i, _ = tcp_to_flange(pos[i], rot_target_vec, tcp_d)
         pose = np.concatenate([flange_pos_i, rot_target_vec])
         print(pose)

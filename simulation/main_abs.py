@@ -7,11 +7,17 @@ import os
 import argparse
 import json
 import math
-import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+def _load_config():
+    path = PROJECT_ROOT / "config.yml"
+    if path.exists():
+        return yaml.safe_load(path.read_text()) or {}
+    return {}
 os.environ.setdefault("MUJOCO_GL", "egl")
 
 import re
@@ -258,9 +264,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     for i, (tgt_pos, tgt_quat) in enumerate(zip(pos, quat)):
         rot_target = Rotation.from_quat(tgt_quat) * rot_dataset_first.inv() * rot_first
         action = np.concatenate([tgt_pos, rot_target.as_rotvec(), [1.0]])
-        step_dt = 1.0 / control_freq
         for _ in range(steps_per_waypoint):
-            t0 = time.monotonic()
             obs, *_ = env.step(action)
 
             if update_object:
@@ -280,9 +284,6 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
                 draw_eef(ds_img, eef_history, eef_quat_vis, *cam_mat[DATASET_CAM])
             frames[dataset_cam_key].append(ds_img)
 
-            elapsed = time.monotonic() - t0
-            if elapsed < step_dt:
-                time.sleep(step_dt - elapsed)
 
         print(f"[{i+1}/{len(pos)}] err={np.linalg.norm(obs['robot0_eef_pos'] - tgt_pos):.4f}")
 
@@ -338,21 +339,22 @@ def plot_traj(pos_cam, quat_cam, pos_robot, quat_robot, video_dir, run_name):
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    cfg = _load_config()
     parser = argparse.ArgumentParser()
-    parser.add_argument("data_dir",    nargs="?", default="data/035_power_drill_20200709_151335")
-    parser.add_argument("--scale",     type=float, default=1)
-    parser.add_argument("--steps",     type=int,   default=2)
+    parser.add_argument("data_dir",    nargs="?", default=cfg.get("data_dir", "data/035_power_drill_20200709_151335"))
+    parser.add_argument("--scale",     type=float, default=cfg.get("scale", 1))
+    parser.add_argument("--steps",     type=int,   default=cfg.get("steps", 2))
     parser.add_argument("--video-dir", default="videos")
     parser.add_argument("--project",   default="robosuite-eef-traj")
     parser.add_argument("--name",      default=None)
     parser.add_argument("--wandb",     action="store_true")
-    parser.add_argument("--show-eef",  action="store_true")
-    parser.add_argument("--angle",     type=float, default=90)
-    parser.add_argument("--eef-dir",   default='mz',
+    parser.add_argument("--show-eef",  action="store_true", default=cfg.get("show_eef", False))
+    parser.add_argument("--angle",     type=float, default=cfg.get("angle", 90))
+    parser.add_argument("--eef-dir",   default=cfg.get("eef_dir", "mz"),
                         help="gripper approach: 'mz'/'py'/'my' or 'SPH_lat<a>lon<b>[z<c>]' (e.g. 'SPH_lat180lon0' for top-down)")
     parser.add_argument("--ref-dir",   default=None,
                         help="reference data dir (e.g. data/ours) whose frame 0 defines the canonical mesh orientation")
-    parser.add_argument("--control-freq", type=float, default=10,
+    parser.add_argument("--control-freq", type=float, default=cfg.get("control_freq", 10),
                         help="OSC control frequency in Hz (default: 20)")
     args = parser.parse_args()
 
@@ -372,7 +374,7 @@ if __name__ == "__main__":
     # print(f"Saved initial pose image -> {PROJECT_ROOT / 'init_pose_sideview.png'}")
     _tmp_env.close()
     
-    center = tuple(np.array(center) + np.array([-0.1, 0.0, 0.1]))    
+    center = tuple(np.array(center) + np.array(cfg.get("center_offset", [-0.1, 0.0, 0.1])))    
     
     data_dir = Path(args.data_dir)
     if not data_dir.is_absolute():
