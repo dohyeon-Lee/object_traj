@@ -55,8 +55,9 @@ def _parse_eef_dir(s):
 
     raise ValueError(f"Invalid --eef-dir {s!r}. Use 'mz'/'py'/'my' or 'SPH_lat<a>lon<b>[z<c>]'.")
 
-def cam_to_robot_matrix(angle_deg, R0=DATASET_CAM_FRAME_IN_ROBOT):
-    return Rotation.from_euler('z', -angle_deg, degrees=True).as_matrix() @ R0
+def cam_to_robot_matrix(angle_deg, elevation_deg=0.0, R0=DATASET_CAM_FRAME_IN_ROBOT):
+    elev = Rotation.from_euler('x', -elevation_deg, degrees=True).as_matrix()
+    return Rotation.from_euler('z', -angle_deg, degrees=True).as_matrix() @ R0 @ elev
 
 def cam_to_robot(pos, quat, R):
     return (R @ pos.T).T, (Rotation.from_matrix(R) * Rotation.from_quat(quat)).as_quat()
@@ -98,6 +99,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("data_dir",    nargs="?", default=cfg.get("data_dir", "data/035_power_drill_20200709_151335"))
     parser.add_argument("--angle",     type=float, default=cfg.get("angle", 90))
+    parser.add_argument("--elevation", type=float, default=cfg.get("elevation", 0.0),
+                        help="vertical camera angle in degrees (0=horizontal, 90=top-down)")
     parser.add_argument("--scale",     type=float, default=cfg.get("scale", 1))
     parser.add_argument("--eef-dir",   default=cfg.get("eef_dir", "mz"),
                         help="gripper approach: 'mz'/'py'/'my' or 'SPH_lat<a>lon<b>[z<c>]' (e.g. 'SPH_lat180lon0' for top-down)")
@@ -136,7 +139,7 @@ if __name__ == "__main__":
     data_dir = Path(args.data_dir)
     if not data_dir.is_absolute():
         data_dir = PROJECT_ROOT / data_dir
-    R = cam_to_robot_matrix(args.angle)
+    R = cam_to_robot_matrix(args.angle, args.elevation)
     pos_cam, quat_cam = load_traj(data_dir)
     pos, quat = cam_to_robot(pos_cam, quat_cam, R)
     pos, quat = remap(pos, quat, center=center, scale=args.scale)
@@ -175,7 +178,7 @@ if __name__ == "__main__":
     data_name = Path(args.data_dir).name if Path(args.data_dir).name else data_dir.name
     video_dir = PROJECT_ROOT / "videos" / data_name
     video_dir.mkdir(parents=True, exist_ok=True)
-    video_path = video_dir / f"deploy_video_{int(args.angle)}_{args.eef_dir}.mp4"
+    video_path = video_dir / f"deploy_video_{int(args.angle)}_elev{int(args.elevation)}_{args.eef_dir}.mp4"
     writer = imageio.get_writer(
         str(video_path), fps=10, codec="libx264", pixelformat="yuv420p",
     ) if varied_cam_key else None

@@ -126,8 +126,9 @@ def load_traj(data_dir):
     return poses[:, :3, 3], Rotation.from_matrix(poses[:, :3, :3]).as_quat()
 
 
-def cam_to_robot_matrix(angle_deg, R0=DATASET_CAM_FRAME_IN_ROBOT):
-    return Rotation.from_euler('z', -angle_deg, degrees=True).as_matrix() @ R0
+def cam_to_robot_matrix(angle_deg, elevation_deg=0.0, R0=DATASET_CAM_FRAME_IN_ROBOT):
+    elev = Rotation.from_euler('x', -elevation_deg, degrees=True).as_matrix()
+    return Rotation.from_euler('z', -angle_deg, degrees=True).as_matrix() @ R0 @ elev
 
 
 def cam_to_robot(pos, quat, R):
@@ -199,12 +200,12 @@ def solve_ik(env, target_pos, target_rot, n_iter=1000, tol=1e-4, damping=0.01, m
 
 def run_sim(pos, quat, pos_cam_raw, scale, center,
             steps_per_waypoint, video_dir, run_name, wandb_run,
-            R=DATASET_CAM_FRAME_IN_ROBOT, angle=0.0, eef_dir='mz',
+            R=DATASET_CAM_FRAME_IN_ROBOT, angle=0.0, elevation=0.0, eef_dir='mz',
             show_eef=False, fovy=60.0, cam_h=480, cam_w=640, data_dir=None,
             mesh_rot_offset=None, control_freq=20):
 
     cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R)
-    dataset_cam_key   = f"dataset_cam_{angle:g}_{eef_dir}"
+    dataset_cam_key   = f"dataset_cam_{angle:g}_elev{elevation:g}_{eef_dir}"
 
     env = suite.make(
         env_name="Lift", robots="PandaRotatedGripper",
@@ -350,6 +351,8 @@ if __name__ == "__main__":
     parser.add_argument("--wandb",     action="store_true")
     parser.add_argument("--show-eef",  action="store_true", default=cfg.get("show_eef", False))
     parser.add_argument("--angle",     type=float, default=cfg.get("angle", 90))
+    parser.add_argument("--elevation", type=float, default=cfg.get("elevation", 0.0),
+                        help="vertical camera angle in degrees (0=horizontal, 90=top-down)")
     parser.add_argument("--eef-dir",   default=cfg.get("eef_dir", "mz"),
                         help="gripper approach: 'mz'/'py'/'my' or 'SPH_lat<a>lon<b>[z<c>]' (e.g. 'SPH_lat180lon0' for top-down)")
     parser.add_argument("--ref-dir",   default=None,
@@ -380,7 +383,7 @@ if __name__ == "__main__":
     if not data_dir.is_absolute():
         data_dir = PROJECT_ROOT / data_dir
     run_name  = args.name or data_dir.name
-    R         = cam_to_robot_matrix(args.angle)
+    R         = cam_to_robot_matrix(args.angle, args.elevation)
 
     pos_cam, quat_cam = load_traj(data_dir)
     pos, quat = cam_to_robot(pos_cam, quat_cam, R)
@@ -411,7 +414,7 @@ if __name__ == "__main__":
     wandb_run = wandb.init(project=args.project, name=run_name) if args.wandb else None
     run_sim(pos, quat, pos_cam, args.scale, center,
             args.steps, video_dir, run_name, wandb_run, R=R,
-            angle=args.angle, eef_dir=args.eef_dir, show_eef=args.show_eef,
+            angle=args.angle, elevation=args.elevation, eef_dir=args.eef_dir, show_eef=args.show_eef,
             fovy=fovy, cam_h=cam_h, cam_w=cam_w, data_dir=data_dir,
             mesh_rot_offset=mesh_rot_offset, control_freq=args.control_freq)
     if wandb_run:
