@@ -161,6 +161,44 @@ def _hide_default_lift_props(root):
             geom.set("conaffinity", "0")
 
 
+def _set_white_background(root):
+    """Set simulation background to white using a flat white skybox texture."""
+    asset = root.find("asset")
+    if asset is None:
+        asset = ET.SubElement(root, "asset")
+    for tex in asset.findall("texture"):
+        if tex.get("type") == "skybox":
+            tex.set("builtin", "flat")
+            tex.set("rgb1", "1 1 1")
+            tex.set("rgb2", "1 1 1")
+            return
+    ET.SubElement(asset, "texture", {
+        "name": "white_skybox",
+        "type": "skybox",
+        "builtin": "flat",
+        "rgb1": "1 1 1",
+        "rgb2": "1 1 1",
+        "width": "512",
+        "height": "512",
+    })
+
+
+def _hide_robot_mount_and_floor(root):
+    """Hide robot mount/stand/wall geoms and floor/ceiling planes."""
+    hide_keywords = ["mount", "pedestal", "stand", "wall", "floor", "ceiling"]
+    for geom in root.findall(".//geom"):
+        name = geom.get("name", "").lower()
+        geom_type = geom.get("type", "")
+        if any(kw in name for kw in hide_keywords) or geom_type == "plane":
+            rgba = geom.get("rgba", "1 1 1 1").split()
+            if len(rgba) != 4:
+                rgba = ["1", "1", "1", "1"]
+            rgba[3] = "0"
+            geom.set("rgba", " ".join(rgba))
+            geom.set("contype", "0")
+            geom.set("conaffinity", "0")
+
+
 def _set_offscreen_framebuffer(root, width, height):
     """Ensure MuJoCo's offscreen framebuffer can render dataset-resolution videos."""
     visual = root.find("visual")
@@ -236,6 +274,8 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     root = ET.fromstring(env.model.get_xml())
     _set_offscreen_framebuffer(root, cam_w, cam_h)
     _hide_default_lift_props(root)
+    _set_white_background(root)
+    _hide_robot_mount_and_floor(root)
     ET.SubElement(root.find('worldbody'), 'camera', {
         'name': DATASET_CAM,
         'pos':  ' '.join(f"{v:.4f}" for v in cam_pos),
