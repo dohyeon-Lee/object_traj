@@ -1,19 +1,19 @@
 # Shared between simulation/main_abs.py and deploy_franka/main.py
 # data/035_power_drill_20200709_151335
 
-data_dir: data/ours      
-angle: 50              
-elevation: 0       
-scale: 1.0              
-eef_dir: mz
-center_offset: [0.0, 0.0, 0.0]  
+# data_dir: data/ours      
+# angle: 50              
+# elevation: 0       
+# scale: 1.0              
+# eef_dir: mz
+# center_offset: [0.0, 0.0, 0.0]  
 
-# data_dir: data/juice 
-# angle: 50                   
-# elevation: 0               
-# scale: 1.0                   
-# eef_dir: SPH_lat100lon-70z0                  
-# center_offset: [0.1, 0.0, 0.0]  
+data_dir: data/juice 
+angle: 50                   
+elevation: 0               
+scale: 1.0                   
+eef_dir: SPH_lat100lon-70z80                  
+center_offset: [0.1, 0.0, 0.0]  
 
 # Simulation-specific (simulation/main_abs.py)
 steps: 2                     # MuJoCo steps per trajectory waypoint
