@@ -1,12 +1,19 @@
 # Shared between simulation/main_abs.py and deploy_franka/main.py
 # data/035_power_drill_20200709_151335
-data_dir: data/pour_into_8625         # dataset to use (relative to project root)
 
-angle: 0                    # camera-to-robot horizontal rotation (degrees)
-elevation: 90               # camera vertical tilt (degrees, 0=horizontal, 90=top-down)
-scale: 1.0                   # trajectory scale factor
-eef_dir: mz # SPH_lat150lon0z0                  # gripper approach direction: mz / py / my / SPH_lat<a>lon<b>z<c>
-center_offset: [0.0, 0.0, 0.0]  # offset added to EEF initial position (meters, robot frame)
+data_dir: data/ours      
+angle: 50              
+elevation: 0       
+scale: 1.0              
+eef_dir: mz
+center_offset: [0.0, 0.0, 0.0]  
+
+# data_dir: data/juice 
+# angle: 50                   
+# elevation: 0               
+# scale: 1.0                   
+# eef_dir: SPH_lat100lon-70z0                  
+# center_offset: [0.1, 0.0, 0.0]  
 
 # Simulation-specific (simulation/main_abs.py)
 steps: 2                     # MuJoCo steps per trajectory waypoint

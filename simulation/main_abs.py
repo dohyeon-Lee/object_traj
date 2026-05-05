@@ -75,7 +75,6 @@ DATASET_CAM_FRAME_IN_ROBOT = np.array([[0, 0, -1],
 
 
 DROID_INIT_QPOS = np.array([0, -np.pi / 5, 0, -4 * np.pi / 5, 0, 3 * np.pi / 5, 0.0])
-HAND_JOINT_Z_OFFSET = Rotation.from_euler('z', -np.pi / 4)
 
 def _set_droid_init_qpos(env):
     import mujoco
@@ -162,38 +161,54 @@ def _hide_default_lift_props(root):
             geom.set("conaffinity", "0")
 
 
-# ── IK ────────────────────────────────────────────────────────────────────────
+def _set_offscreen_framebuffer(root, width, height):
+    """Ensure MuJoCo's offscreen framebuffer can render dataset-resolution videos."""
+    visual = root.find("visual")
+    if visual is None:
+        visual = ET.SubElement(root, "visual")
+    global_cfg = visual.find("global")
+    if global_cfg is None:
+        global_cfg = ET.SubElement(visual, "global")
+    global_cfg.set("offwidth", str(int(width)))
+    global_cfg.set("offheight", str(int(height)))
 
-def solve_ik(env, target_pos, target_rot, n_iter=1000, tol=1e-4, damping=0.01, max_dq=0.2):
+
+def move_to_start_pose(env, target_pos, target_rot, n_steps=100):
+    """Move to the first pose through the controller, matching deploy_franka startup."""
+    action = np.concatenate([target_pos, target_rot.as_rotvec(), [1.0]])
+    obs = env._get_observations()
+    for _ in range(n_steps):
+        obs, *_ = env.step(action)
+    return obs
+
+
+def make_renderers(env, width, height, camera_names):
+    """Create MuJoCo renderers with visual geoms only."""
     import mujoco
-    robot     = env.robots[0]
-    m         = getattr(env.sim.model, '_model', env.sim.model)
-    d         = getattr(env.sim.data,  '_data',  env.sim.data)
-    site_id   = next(iter(robot.eef_site_id.values())) if isinstance(robot.eef_site_id, dict) \
-                else int(robot.eef_site_id)
-    eef_name  = next(iter(robot.robot_model.eef_name.values())) if isinstance(robot.robot_model.eef_name, dict) \
-                else robot.robot_model.eef_name
-    body_id   = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, eef_name)
-    joint_ids = list(robot._ref_joint_pos_indexes)
-    nv        = m.nv
-    jacp, jacr, _dummy = np.zeros((3, nv)), np.zeros((3, nv)), np.zeros((3, nv))
-    R_target  = target_rot.as_matrix()
-    err       = np.ones(6)
-    for _ in range(n_iter):
-        mujoco.mj_forward(m, d)
-        dp  = target_pos - d.site_xpos[site_id]
-        dR  = Rotation.from_matrix(R_target @ d.xmat[body_id].reshape(3, 3).T).as_rotvec()
-        err = np.concatenate([dp, dR])
-        if np.linalg.norm(err) < tol:
-            break
-        mujoco.mj_jacSite(m, d, jacp,   _dummy, site_id)
-        mujoco.mj_jacBody(m, d, _dummy, jacr,   body_id)
-        J  = np.vstack([jacp, jacr])[:, joint_ids]
-        dq = J.T @ np.linalg.solve(J @ J.T + damping**2 * np.eye(6), err)
-        d.qpos[joint_ids] += np.clip(dq, -max_dq, max_dq)
-    d.qvel[:] = 0
-    mujoco.mj_forward(m, d)
-    print(f"IK residual: {np.linalg.norm(err):.5f}")
+
+    model = getattr(env.sim.model, "_model", env.sim.model)
+    data = getattr(env.sim.data, "_data", env.sim.data)
+    scene_option = mujoco.MjvOption()
+    scene_option.geomgroup[:] = 0
+    scene_option.geomgroup[1] = 1
+    camera_ids = {
+        camera_name: env.sim.model.camera_name2id(camera_name)
+        for camera_name in camera_names
+    }
+    renderers = {
+        camera_name: mujoco.Renderer(model, height=height, width=width)
+        for camera_name in camera_names
+    }
+    return renderers, data, scene_option, camera_ids
+
+
+def render_camera(renderer, data, scene_option, camera_id, warmup=False):
+    """Render one camera frame; warmup discards a stale offscreen buffer."""
+    if warmup:
+        renderer.update_scene(data, camera=camera_id, scene_option=scene_option)
+        renderer.render()
+    renderer.update_scene(data, camera=camera_id, scene_option=scene_option)
+    return renderer.render().copy()
 
 
 # ── simulation ────────────────────────────────────────────────────────────────
@@ -211,7 +226,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
         env_name="Lift", robots="PandaRotatedGripper",
         gripper_types="Robotiq85Gripper",
         controller_configs=_load_ctrl_cfg(),
-        has_renderer=False, has_offscreen_renderer=True, use_camera_obs=True,
+        has_renderer=False, has_offscreen_renderer=True, use_camera_obs=False,
         camera_names=CAMERAS, camera_heights=cam_h, camera_widths=cam_w,
         ignore_done=True, horizon=steps_per_waypoint * len(pos) + 100,
         hard_reset=False, control_freq=control_freq,
@@ -219,6 +234,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
 
     # Inject dataset camera and object mesh, then recompile
     root = ET.fromstring(env.model.get_xml())
+    _set_offscreen_framebuffer(root, cam_w, cam_h)
     _hide_default_lift_props(root)
     ET.SubElement(root.find('worldbody'), 'camera', {
         'name': DATASET_CAM,
@@ -238,19 +254,18 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     _body_id = env.sim.model.body_name2id(_eef_body_name)
     _site_id = next(iter(env.robots[0].eef_site_id.values())) if isinstance(env.robots[0].eef_site_id, dict) else int(env.robots[0].eef_site_id)
 
-    # Orient gripper to match trajectory start, then IK to first waypoint
+    # Move to the first waypoint through the controller, like deploy_franka.
     rot_eef_init      = Rotation.from_matrix(env.sim.data.body_xmat[_body_id].reshape(3, 3))
     rot_dataset_first = Rotation.from_quat(quat[0])
-    rot_first_ik = _parse_eef_dir(eef_dir) * rot_eef_init
+    rot_first_cmd = _parse_eef_dir(eef_dir) * rot_eef_init
 
-    solve_ik(env, pos[0], rot_first_ik)
-    obs = env._get_observations()
+    obs = move_to_start_pose(env, pos[0], rot_first_cmd)
 
-    # Read site orientation directly from sim data after IK (obs may cache pre-IK state)
+    # Read site orientation directly from sim data after the startup move.
     rot_first = Rotation.from_matrix(env.sim.data.site_xmat[_site_id].reshape(3, 3))
     C_inv     = rot_first.inv() * rot_dataset_first
     
-    # Rigidly attach object to EEF (grip_site == pos[0] after IK converges)
+    # Rigidly attach object to EEF.
     quat0_mesh = quat[0]
     if mesh_rot_offset is not None:
         quat0_mesh = (Rotation.from_quat(quat[0]) * mesh_rot_offset.inv()).as_quat()
@@ -258,6 +273,9 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     if update_object:
         update_object()
 
+    renderers, render_data, render_option, render_camera_ids = make_renderers(
+        env, cam_w, cam_h, CAMERAS + [DATASET_CAM]
+    )
     cam_mat     = {cam: get_cam_matrices(env, cam, cam_h, cam_w) for cam in CAMERAS + [DATASET_CAM]}
     frames      = {cam: [] for cam in CAMERAS + [dataset_cam_key]}
     eef_history = []
@@ -274,20 +292,25 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
             eef_history.append(obs["robot0_eef_pos"].copy())
             eef_quat_vis = (Rotation.from_quat(obs["robot0_eef_quat_site"]) * C_inv).as_quat()
 
-            for cam in CAMERAS:
-                img = env.sim.render(cam_w, cam_h, camera_name=cam)[::-1].copy()
-                if show_eef:
-                    draw_eef(img, eef_history, eef_quat_vis, *cam_mat[cam])
-                frames[cam].append(img)
-
-            ds_img = env.sim.render(cam_w, cam_h, camera_name=DATASET_CAM)[::-1].copy()
+            ds_img = render_camera(
+                renderers[DATASET_CAM], render_data, render_option,
+                render_camera_ids[DATASET_CAM], warmup=True
+            )
             if show_eef:
                 draw_eef(ds_img, eef_history, eef_quat_vis, *cam_mat[DATASET_CAM])
             frames[dataset_cam_key].append(ds_img)
 
+            for cam in CAMERAS:
+                img = render_camera(renderers[cam], render_data, render_option, render_camera_ids[cam])
+                if show_eef:
+                    draw_eef(img, eef_history, eef_quat_vis, *cam_mat[cam])
+                frames[cam].append(img)
+
 
         print(f"[{i+1}/{len(pos)}] err={np.linalg.norm(obs['robot0_eef_pos'] - tgt_pos):.4f}")
 
+    for renderer in renderers.values():
+        renderer.close()
     env.close()
     _save(frames, video_dir, run_name, wandb_run)
 
@@ -372,9 +395,6 @@ if __name__ == "__main__":
     _tmp_robot = _tmp_env.robots[0]
     _tmp_site_id = next(iter(_tmp_robot.eef_site_id.values())) if isinstance(_tmp_robot.eef_site_id, dict) else int(_tmp_robot.eef_site_id)
     center = tuple(_tmp_env.sim.data.site_xpos[_tmp_site_id].copy())
-    # _init_img = _tmp_env.sim.render(640, 480, camera_name="sideview")[::-1]
-    # imageio.imwrite(str(PROJECT_ROOT / "init_pose_sideview.png"), _init_img)
-    # print(f"Saved initial pose image -> {PROJECT_ROOT / 'init_pose_sideview.png'}")
     _tmp_env.close()
     
     center = tuple(np.array(center) + np.array(cfg.get("center_offset", [-0.1, 0.0, 0.1])))    

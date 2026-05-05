@@ -11,7 +11,7 @@ Creates (in-place inside data_dir):
   rgb/{:06d}.jpg          – symlinks → existing {:04d}.png  (viz_overlay expects 6-digit jpg)
 
 Usage:
-  python convert_sam3d.py data/pour_into_8625
+  python convert_sam3d.py data/juice
   python convert_sam3d.py data/juice --pose-R R_cum --pose-t t
 """
 import argparse
@@ -25,7 +25,16 @@ import numpy as np
 # ── poses ─────────────────────────────────────────────────────────────────────
 
 def convert_poses(data_dir: Path, pose_R: str, pose_t: str) -> None:
-    d = np.load(data_dir / "poses.npz")
+    src = data_dir / "poses.npz"
+    dst_dir = data_dir / "object_pose"
+    dst = dst_dir / "poses.npz"
+    if not src.exists():
+        if dst.exists():
+            print(f"  poses  → {dst}  (already standard, kept)")
+            return
+        raise FileNotFoundError(f"Missing pose source: {src}")
+
+    d = np.load(src)
     R = d[pose_R].astype(np.float64)   # (N, 3, 3)
     t = d[pose_t].astype(np.float64)   # (N, 3)
     N = len(R)
@@ -35,16 +44,23 @@ def convert_poses(data_dir: Path, pose_R: str, pose_t: str) -> None:
     poses[:, :3,  3] = t
     frames = np.arange(N, dtype=np.int64)
 
-    dst_dir = data_dir / "object_pose"
     dst_dir.mkdir(exist_ok=True)
-    np.savez(dst_dir / "poses.npz", poses=poses, frames=frames)
-    print(f"  poses  → {dst_dir / 'poses.npz'}  ({N} frames, keys: R={pose_R}, t={pose_t})")
+    np.savez(dst, poses=poses, frames=frames)
+    print(f"  poses  → {dst}  ({N} frames, keys: R={pose_R}, t={pose_t})")
 
 
 # ── camera ────────────────────────────────────────────────────────────────────
 
 def convert_camera(data_dir: Path) -> None:
-    meta = json.loads((data_dir / "meta.json").read_text())
+    meta_path = data_dir / "meta.json"
+    dst = data_dir / "camera.json"
+    if not meta_path.exists():
+        if dst.exists():
+            print(f"  camera → {dst}  (already standard, kept)")
+            return
+        raise FileNotFoundError(f"Missing camera source: {meta_path}")
+
+    meta = json.loads(meta_path.read_text())
     intr = meta["intrinsics"]   # {fx, fy, cx, cy}
     h, w = meta["image_size"]   # [H, W]
 
@@ -57,14 +73,65 @@ def convert_camera(data_dir: Path) -> None:
             [0.0,        0.0,        1.0        ],
         ],
     }
-    dst = data_dir / "camera.json"
     dst.write_text(json.dumps(camera, indent=2))
     print(f"  camera → {dst}  ({w}x{h})")
 
 
 # ── mesh ──────────────────────────────────────────────────────────────────────
 
+def write_placeholder_texture(mesh_dir: Path) -> None:
+    from PIL import Image
+
+    tex_path = mesh_dir / "texture_map.png"
+    if not tex_path.exists():
+        # Flat gray placeholder — MuJoCo needs a texture file even for solid-color rendering
+        img = Image.fromarray(np.full((4, 4, 3), 160, dtype=np.uint8))
+        img.save(str(tex_path))
+        print(f"  tex    → {tex_path}  (placeholder)")
+    else:
+        print(f"  tex    → {tex_path}  (already exists, kept)")
+
+
+def strip_vertex_colors(src: Path, dst: Path) -> None:
+    with src.open() as fin, dst.open("w") as fout:
+        for line in fin:
+            if line.startswith("v "):
+                parts = line.split()
+                fout.write(f"v {parts[1]} {parts[2]} {parts[3]}\n")
+            else:
+                fout.write(line)
+
+
+def convert_existing_obj_mesh(data_dir: Path) -> bool:
+    mesh_dir = data_dir / "mesh"
+    obj_path = mesh_dir / "textured_simple.obj"
+    candidates = [
+        obj_path,
+        mesh_dir / "mesh_opencv.obj",
+        mesh_dir / "textured.obj",
+    ]
+
+    for src in candidates:
+        if src.exists():
+            if src == obj_path:
+                print(f"  mesh   → {obj_path}  (already standard, kept)")
+            else:
+                strip_vertex_colors(src, obj_path)
+                print(f"  mesh   → {obj_path}  (from {src.name})")
+            write_placeholder_texture(mesh_dir)
+            return True
+    return False
+
+
 def convert_mesh(data_dir: Path) -> None:
+    mesh_dir = data_dir / "mesh"
+    mesh_dir.mkdir(exist_ok=True)
+
+    if not (data_dir / "sam3d_mesh.glb").exists():
+        if convert_existing_obj_mesh(data_dir):
+            return
+        raise FileNotFoundError(f"Missing mesh source: {data_dir / 'sam3d_mesh.glb'}")
+
     try:
         import trimesh
     except ImportError:
@@ -72,9 +139,12 @@ def convert_mesh(data_dir: Path) -> None:
             "trimesh is required for mesh conversion.\n"
             "Install with:  pip install trimesh[easy]"
         )
-    from PIL import Image
 
-    meta  = json.loads((data_dir / "meta.json").read_text())
+    meta_path = data_dir / "meta.json"
+    if not meta_path.exists():
+        raise FileNotFoundError(f"Missing mesh metadata: {meta_path}")
+
+    meta  = json.loads(meta_path.read_text())
     scale = float(meta["sam3d_scale_to_meters"])
 
     # GLB GLTF Y-up → OpenCV camera-local frame
@@ -92,9 +162,6 @@ def convert_mesh(data_dir: Path) -> None:
 
     mesh.vertices = (M @ mesh.vertices.T).T
 
-    mesh_dir = data_dir / "mesh"
-    mesh_dir.mkdir(exist_ok=True)
-
     obj_path = mesh_dir / "textured_simple.obj"
     # trimesh may write vertex colors as "v x y z r g b"; prepare_mesh() strips them
     result = trimesh.exchange.obj.export_obj(mesh)
@@ -103,15 +170,7 @@ def convert_mesh(data_dir: Path) -> None:
     else:
         obj_path.write_bytes(result)
     print(f"  mesh   → {obj_path}  ({len(mesh.vertices)} verts, {len(mesh.faces)} faces)")
-
-    tex_path = mesh_dir / "texture_map.png"
-    if not tex_path.exists():
-        # Flat gray placeholder — MuJoCo needs a texture file even for solid-color rendering
-        img = Image.fromarray(np.full((4, 4, 3), 160, dtype=np.uint8))
-        img.save(str(tex_path))
-        print(f"  tex    → {tex_path}  (placeholder)")
-    else:
-        print(f"  tex    → {tex_path}  (already exists, kept)")
+    write_placeholder_texture(mesh_dir)
 
 
 # ── rgb symlinks ──────────────────────────────────────────────────────────────
