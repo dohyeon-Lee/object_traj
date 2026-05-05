@@ -97,6 +97,7 @@ def run(env, pose6, step=1, grip_close=False, hz=10):
 
 if __name__ == "__main__":
     cfg = _load_config()
+    initial_frame = cfg.get("start_frame", 0)
     parser = argparse.ArgumentParser()
     parser.add_argument("data_dir",    nargs="?", default=cfg.get("data_dir", "data/035_power_drill_20200709_151335"))
     parser.add_argument("--angle",     type=float, default=cfg.get("angle", 90))
@@ -149,7 +150,7 @@ if __name__ == "__main__":
 
     rot_eef_init      = Rotation.from_euler("xyz", initial_pose[3:])
 
-    rot_dataset_first = Rotation.from_quat(quat[0])
+    rot_dataset_first = Rotation.from_quat(quat[initial_frame])
     rot_first = _parse_eef_dir(args.eef_dir) * rot_eef_init
     rot_first_vec = rot_first.as_euler("xyz")
 
@@ -201,7 +202,7 @@ if __name__ == "__main__":
         writer.append_data(np.array(frame_pil))
 
     # --- move to first pose ---
-    flange_pos0, _ = tcp_to_flange(pos[0], rot_first_vec, tcp_d)
+    flange_pos0, _ = tcp_to_flange(pos[initial_frame], rot_first_vec, tcp_d)
     pose = np.concatenate([flange_pos0, rot_first_vec])
     run(env, pose.tolist(), step=100, grip_close=False)
     print("pose[0]:", pose)
@@ -243,10 +244,10 @@ if __name__ == "__main__":
     # --- Step 3: trajectory loop ---
     _grab_frame()
 
-    for i in range(len(pos)):
-        rot_target = Rotation.from_quat(quat[i]) * rot_dataset_first.inv() * rot_first
+    for i in range(len(pos) - initial_frame):
+        rot_target = Rotation.from_quat(quat[i + initial_frame]) * rot_dataset_first.inv() * rot_first
         rot_target_vec = rot_target.as_euler("xyz")
-        flange_pos_i, _ = tcp_to_flange(pos[i], rot_target_vec, tcp_d)
+        flange_pos_i, _ = tcp_to_flange(pos[i + initial_frame], rot_target_vec, tcp_d)
         pose = np.concatenate([flange_pos_i, rot_target_vec])
         print(pose)
         run(env, pose.tolist(), step=1, grip_close=True)

@@ -211,7 +211,7 @@ def _draw_object_axes(img, pose_cam, K, length=0.05):
     return img
 
 
-def _draw_trajectory(images, poses_cam, K, color, radius=6, trail_len=20):
+def _draw_trajectory(images, poses_cam, K, color, radius=6, trail_len=20, show_eef=True):
     origins = poses_cam[:, :3, 3]
     valid   = origins[:, 2] > 0.01
     pixels  = np.full((len(origins), 2), -1, dtype=float)
@@ -219,32 +219,35 @@ def _draw_trajectory(images, poses_cam, K, color, radius=6, trail_len=20):
     out = []
     for i, img in enumerate(images):
         frame = img.copy()
-        H, W  = frame.shape[:2]
-        start = max(0, i - trail_len)
-        trail = [(int(pixels[j, 0]), int(pixels[j, 1]))
-                 for j in range(start, i+1)
-                 if 0 <= pixels[j, 0] < W and 0 <= pixels[j, 1] < H]
-        for k in range(1, len(trail)):
-            alpha = k / len(trail)
-            cv2.line(frame, trail[k-1], trail[k],
-                     tuple(int(x * alpha) for x in color), 2, cv2.LINE_AA)
-        u, v = pixels[i]
-        if 0 <= u < W and 0 <= v < H:
-            cv2.circle(frame, (int(u), int(v)), radius,     color,           -1, cv2.LINE_AA)
-            cv2.circle(frame, (int(u), int(v)), radius + 2, (255, 255, 255),  1, cv2.LINE_AA)
-        frame = _draw_object_axes(frame, poses_cam[i], K)
+        if show_eef:
+            H, W  = frame.shape[:2]
+            start = max(0, i - trail_len)
+            trail = [(int(pixels[j, 0]), int(pixels[j, 1]))
+                     for j in range(start, i+1)
+                     if 0 <= pixels[j, 0] < W and 0 <= pixels[j, 1] < H]
+            for k in range(1, len(trail)):
+                alpha = k / len(trail)
+                cv2.line(frame, trail[k-1], trail[k],
+                         tuple(int(x * alpha) for x in color), 2, cv2.LINE_AA)
+            u, v = pixels[i]
+            if 0 <= u < W and 0 <= v < H:
+                cv2.circle(frame, (int(u), int(v)), radius,     color,           -1, cv2.LINE_AA)
+                cv2.circle(frame, (int(u), int(v)), radius + 2, (255, 255, 255),  1, cv2.LINE_AA)
+            frame = _draw_object_axes(frame, poses_cam[i], K)
         out.append(frame)
     return out
 
 
-def make_video(data_dir, fps=10):
+def make_video(data_dir, fps=10, show_eef=True, start_frame=0):
     """Generate trajectory.mp4 from dataset RGB frames + pose data."""
     data_dir = Path(data_dir)
     out_dir  = data_dir.parent.parent / "videos" / data_dir.name
     out_dir.mkdir(parents=True, exist_ok=True)
     poses, images, K = _load_data(data_dir)
-    print(f"[visualize] Loaded {len(poses)} frames from {data_dir.name}")
-    frames_drawn = _draw_trajectory(images, poses, K, color=(0, 200, 255))
+    poses  = poses[start_frame:]
+    images = images[start_frame:]
+    print(f"[visualize] Loaded {len(poses)} frames from {data_dir.name} (start_frame={start_frame})")
+    frames_drawn = _draw_trajectory(images, poses, K, color=(0, 200, 255), show_eef=show_eef)
     path = str(out_dir / "trajectory.mp4")
     imageio.mimwrite(path, frames_drawn, fps=fps, codec="libx264",
                      output_params=["-crf", "18"])

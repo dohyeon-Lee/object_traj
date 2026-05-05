@@ -28,9 +28,6 @@ import robosuite as suite
 from robosuite.models.robots import Panda as PandaModel
 from robosuite.models.robots.robot_model import register_robot
 from robosuite.robots import ROBOT_CLASS_MAPPING
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation
 
 # Panda model + Robotiq85 with 45° z-axis rotation at gripper mount
@@ -65,8 +62,13 @@ from viz_overlay import (get_cam_matrices, draw_eef,
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
-CAMERAS     = ["frontview", "birdview", "sideview"]
+CAMERAS     = ["frontview", "birdview", "sideview_opp"]
 DATASET_CAM = "dataset_cam"
+SIDEVIEW_OPP = {
+    "name": "sideview_opp",
+    "pos":  "-0.056518 -1.276122 1.487957",
+    "quat": "-0.806418 -0.591223 0.006878 0.009905",
+}
 
 # cam +Z (optical) = robot -X,  cam +Y (down) = robot -Z,  cam +X (right) = robot +Y
 DATASET_CAM_FRAME_IN_ROBOT = np.array([[0, 0, -1],
@@ -139,10 +141,13 @@ def remap(pos, quat, center=(0.0, 0.0, 1.0), scale=1.0, use_initial=False):
     return (pos - ref) * scale + np.array(center), quat
 
 
-def compute_dataset_cam(pos_cam_raw, scale, center, R, use_initial=False):
+def compute_dataset_cam(pos_cam_raw, scale, center, R, use_initial=False, cam_distance=1.0):
     anchor   = pos_cam_raw[0] if use_initial else pos_cam_raw.mean(axis=0)
     mean_raw = R @ anchor
     cam_pos  = (np.zeros(3) - mean_raw) * scale + np.array(center)
+    if cam_distance != 1.0:
+        direction = cam_pos - np.array(center)
+        cam_pos = np.array(center) + direction * cam_distance
     mujoco_cam_mat = np.column_stack([R[:, 0], -R[:, 1], -R[:, 2]])
     q = Rotation.from_matrix(mujoco_cam_mat).as_quat()
     return cam_pos, np.array([q[3], q[0], q[1], q[2]])
@@ -257,9 +262,10 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
             steps_per_waypoint, video_dir, run_name, wandb_run,
             R=DATASET_CAM_FRAME_IN_ROBOT, angle=0.0, elevation=0.0, eef_dir='mz',
             show_eef=False, fovy=60.0, cam_h=480, cam_w=640, data_dir=None,
-            mesh_rot_offset=None, control_freq=20, use_initial=False):
+            mesh_rot_offset=None, control_freq=20, use_initial=False,
+            initial_frame=0, dataset_cam_only=False, cam_distance=1.0):
 
-    cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R, use_initial=use_initial)
+    cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R, use_initial=use_initial, cam_distance=cam_distance)
     dataset_cam_key   = f"dataset_cam_{angle:g}_elev{elevation:g}_{eef_dir}"
 
     env = suite.make(
@@ -268,7 +274,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
         controller_configs=_load_ctrl_cfg(),
         has_renderer=False, has_offscreen_renderer=True, use_camera_obs=False,
         camera_names=CAMERAS, camera_heights=cam_h, camera_widths=cam_w,
-        ignore_done=True, horizon=steps_per_waypoint * len(pos) + 100,
+        ignore_done=True, horizon=steps_per_waypoint * (len(pos) - initial_frame) + 100,
         hard_reset=False, control_freq=control_freq,
     )
 
@@ -278,12 +284,14 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     _hide_default_lift_props(root)
     _set_white_background(root)
     _hide_robot_mount_and_floor(root)
-    ET.SubElement(root.find('worldbody'), 'camera', {
+    worldbody = root.find('worldbody')
+    ET.SubElement(worldbody, 'camera', {
         'name': DATASET_CAM,
         'pos':  ' '.join(f"{v:.4f}" for v in cam_pos),
         'quat': ' '.join(f"{v:.6f}" for v in cam_quat),
         'fovy': f'{fovy:.4f}',
     })
+    ET.SubElement(worldbody, 'camera', SIDEVIEW_OPP)
     if data_dir is not None:
         inject_object_xml(root, data_dir)
     env._initialize_sim(ET.tostring(root, encoding='unicode'))
@@ -292,37 +300,39 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     obs = env._get_observations()
 
     # Read EEF state directly from MuJoCo (obs may be stale after _set_droid_init_qpos)
-    _eef_body_name = next(iter(env.robots[0].robot_model.eef_name.values())) if isinstance(env.robots[0].robot_model.eef_name, dict) else env.robots[0].robot_model.eef_name
-    _body_id = env.sim.model.body_name2id(_eef_body_name)
     _site_id = next(iter(env.robots[0].eef_site_id.values())) if isinstance(env.robots[0].eef_site_id, dict) else int(env.robots[0].eef_site_id)
 
     # Move to the first waypoint through the controller, like deploy_franka.
-    rot_eef_init      = Rotation.from_matrix(env.sim.data.body_xmat[_body_id].reshape(3, 3))
-    rot_dataset_first = Rotation.from_quat(quat[0])
+    rot_eef_init      = Rotation.from_matrix(env.sim.data.site_xmat[_site_id].reshape(3, 3))
+    rot_dataset_first = Rotation.from_quat(quat[initial_frame])
     rot_first_cmd = _parse_eef_dir(eef_dir) * rot_eef_init
 
-    obs = move_to_start_pose(env, pos[0], rot_first_cmd)
+    obs = move_to_start_pose(env, pos[initial_frame], rot_first_cmd)
 
     # Read site orientation directly from sim data after the startup move.
     rot_first = Rotation.from_matrix(env.sim.data.site_xmat[_site_id].reshape(3, 3))
     C_inv     = rot_first.inv() * rot_dataset_first
     
     # Rigidly attach object to EEF.
-    quat0_mesh = quat[0]
+    quat0_mesh = quat[initial_frame]
     if mesh_rot_offset is not None:
-        quat0_mesh = (Rotation.from_quat(quat[0]) * mesh_rot_offset.inv()).as_quat()
+        quat0_mesh = (Rotation.from_quat(quat[initial_frame]) * mesh_rot_offset.inv()).as_quat()
     update_object = make_object_updater(env, quat0_mesh) if data_dir is not None else None
     if update_object:
         update_object()
 
+    render_cams = [DATASET_CAM] if dataset_cam_only else CAMERAS + [DATASET_CAM]
     renderers, render_data, render_option, render_camera_ids = make_renderers(
-        env, cam_w, cam_h, CAMERAS + [DATASET_CAM]
+        env, cam_w, cam_h, render_cams
     )
-    cam_mat     = {cam: get_cam_matrices(env, cam, cam_h, cam_w) for cam in CAMERAS + [DATASET_CAM]}
-    frames      = {cam: [] for cam in CAMERAS + [dataset_cam_key]}
+    cam_mat     = {cam: get_cam_matrices(env, cam, cam_h, cam_w) for cam in render_cams}
+    extra_cams  = [] if dataset_cam_only else CAMERAS
+    frames      = {cam: [] for cam in extra_cams + [dataset_cam_key]}
     eef_history = []
 
-    for i, (tgt_pos, tgt_quat) in enumerate(zip(pos, quat)):
+    for i in range(len(pos) - initial_frame):
+        tgt_pos = pos[i + initial_frame]
+        tgt_quat = quat[i + initial_frame]
         rot_target = Rotation.from_quat(tgt_quat) * rot_dataset_first.inv() * rot_first
         action = np.concatenate([tgt_pos, rot_target.as_rotvec(), [1.0]])
         for _ in range(steps_per_waypoint):
@@ -342,14 +352,14 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
                 draw_eef(ds_img, eef_history, eef_quat_vis, *cam_mat[DATASET_CAM])
             frames[dataset_cam_key].append(ds_img)
 
-            for cam in CAMERAS:
+            for cam in extra_cams:
                 img = render_camera(renderers[cam], render_data, render_option, render_camera_ids[cam])
                 if show_eef:
                     draw_eef(img, eef_history, eef_quat_vis, *cam_mat[cam])
                 frames[cam].append(img)
 
 
-        print(f"[{i+1}/{len(pos)}] err={np.linalg.norm(obs['robot0_eef_pos'] - tgt_pos):.4f}")
+        print(f"[{i+1}/{len(pos) - initial_frame}] err={np.linalg.norm(obs['robot0_eef_pos'] - tgt_pos):.4f}")
 
     for renderer in renderers.values():
         renderer.close()
@@ -369,43 +379,11 @@ def _save(frames, video_dir, run_name, wandb_run):
             wandb_run.log({f"video/{cam}": wandb.Video(path, fps=20, format="mp4")})
 
 
-def plot_traj(pos_cam, quat_cam, pos_robot, quat_robot, video_dir, run_name):
-    """Save two 6-panel trajectory plots (camera frame and robot frame)."""
-    out_dir = Path(video_dir) / run_name
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    t          = np.arange(len(pos_cam))
-    rpy_cam    = Rotation.from_quat(quat_cam).as_euler('xyz', degrees=True)
-    rpy_robot  = Rotation.from_quat(quat_robot).as_euler('xyz', degrees=True)
-
-    datasets = [
-        ("Camera Frame (original)",         pos_cam,   rpy_cam,   "traj_cam.png"),
-        ("Robot Frame (cam→robot + remap)",  pos_robot, rpy_robot, "traj_robot.png"),
-    ]
-    dim_labels = ['x', 'y', 'z', 'roll', 'pitch', 'yaw']
-    units      = ['m'] * 3 + ['deg'] * 3
-    colors     = ['#e74c3c', '#2ecc71', '#3498db', '#e67e22', '#9b59b6', '#1abc9c']
-
-    for title, pos, rpy, fname in datasets:
-        data = np.concatenate([pos, rpy], axis=1)   # (N, 6)
-        fig, axes = plt.subplots(6, 1, figsize=(12, 10), sharex=True)
-        fig.suptitle(title, fontsize=13, fontweight='bold')
-        for ax, d, label, unit, color in zip(axes, data.T, dim_labels, units, colors):
-            ax.plot(t, d, color=color, linewidth=1.2)
-            ax.set_ylabel(f'{label} ({unit})', fontsize=9)
-            ax.grid(True, alpha=0.3)
-        axes[-1].set_xlabel('frame index')
-        fig.tight_layout()
-        path = str(out_dir / fname)
-        fig.savefig(path, dpi=120, bbox_inches='tight')
-        plt.close(fig)
-        print(f"Saved plot  -> {path}")
-
-
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     cfg = _load_config()
+    initial_frame = cfg.get("start_frame", 0)
     parser = argparse.ArgumentParser()
     parser.add_argument("data_dir",    nargs="?", default=cfg.get("data_dir", "data/035_power_drill_20200709_151335"))
     parser.add_argument("--scale",     type=float, default=cfg.get("scale", 1))
@@ -426,6 +404,10 @@ if __name__ == "__main__":
                         help="OSC control frequency in Hz (default: 20)")
     parser.add_argument("--initial",     action="store_true", default=cfg.get("initial", False),
                         help="anchor traj start (frame 0) to center instead of mean")
+    parser.add_argument("--dataset-cam-only", action="store_true", default=cfg.get("dataset_cam_only", False),
+                        help="only render dataset_cam video (skip front/bird/sideview)")
+    parser.add_argument("--cam-distance", type=float, default=cfg.get("cam_distance", 1.0),
+                        help="dataset_cam distance multiplier (>1 = farther, <1 = closer)")
     args = parser.parse_args()
 
     _tmp_env = suite.make(
@@ -462,8 +444,7 @@ if __name__ == "__main__":
     cam_w    = cam_json["width"]
     fovy     = math.degrees(2 * math.atan(cam_h / (2 * cam_json["intrinsics"][1][1])))
 
-    make_video(data_dir)
-    plot_traj(pos_cam, quat_cam, pos, quat, video_dir, run_name)
+    make_video(data_dir, show_eef=args.show_eef, start_frame=initial_frame)
 
     # mesh orientation correction: align frame-0 body frame to reference canonical pose
     mesh_rot_offset = None
@@ -481,6 +462,7 @@ if __name__ == "__main__":
             angle=args.angle, elevation=args.elevation, eef_dir=args.eef_dir, show_eef=args.show_eef,
             fovy=fovy, cam_h=cam_h, cam_w=cam_w, data_dir=data_dir,
             mesh_rot_offset=mesh_rot_offset, control_freq=args.control_freq,
-            use_initial=args.initial)
+            use_initial=args.initial, initial_frame=initial_frame,
+            dataset_cam_only=args.dataset_cam_only, cam_distance=args.cam_distance)
     if wandb_run:
         wandb_run.finish()
