@@ -1,24 +1,25 @@
 # Shared between simulation/main_abs.py and deploy_franka/main.py
 # data/035_power_drill_20200709_151335
 
-# data_dir: data/ours      
-# angle: 50              
-# elevation: 0       
-# scale: 1.0              
-# eef_dir: mz
-# center_offset: [0.0, 0.0, 0.0]  
+data_dir: data/ours      
+angle: 50              
+elevation: 0       
+scale: 1.0              
+eef_dir: mz
+center_offset: [0.0, 0.0, 0.0]  
 
-data_dir: data/juice 
-angle: 50                   
-elevation: 0               
-scale: 1.0                   
-eef_dir: SPH_lat100lon-70z80                  
-center_offset: [0.1, 0.0, 0.0]  
+# data_dir: data/juice 
+# angle: 50                   
+# elevation: 0               
+# scale: 1.0                   
+# eef_dir: SPH_lat100lon-70z80                  
+# center_offset: [0.1, 0.0, 0.0]  
 
 # Simulation-specific (simulation/main_abs.py)
 steps: 2                     # MuJoCo steps per trajectory waypoint
 control_freq: 10             # OSC control frequency (Hz)
 show_eef: true              # overlay EEF trail and axes on rendered frames
+initial: false               # anchor traj start (frame 0) to center instead of mean
 
 # Deploy-specific (deploy_franka/main.py)
 tcp_offset: 0.145            # flange to gripper tip along flange Z (meters, Robotiq85)

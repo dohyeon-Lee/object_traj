@@ -134,12 +134,14 @@ def cam_to_robot(pos, quat, R):
     return (R @ pos.T).T, (Rotation.from_matrix(R) * Rotation.from_quat(quat)).as_quat()
 
 
-def remap(pos, quat, center=(0.0, 0.0, 1.0), scale=1.0):
-    return (pos - pos.mean(axis=0)) * scale + np.array(center), quat
+def remap(pos, quat, center=(0.0, 0.0, 1.0), scale=1.0, use_initial=False):
+    ref = pos[0] if use_initial else pos.mean(axis=0)
+    return (pos - ref) * scale + np.array(center), quat
 
 
-def compute_dataset_cam(pos_cam_raw, scale, center, R):
-    mean_raw = (R @ pos_cam_raw.T).T.mean(axis=0)
+def compute_dataset_cam(pos_cam_raw, scale, center, R, use_initial=False):
+    anchor   = pos_cam_raw[0] if use_initial else pos_cam_raw.mean(axis=0)
+    mean_raw = R @ anchor
     cam_pos  = (np.zeros(3) - mean_raw) * scale + np.array(center)
     mujoco_cam_mat = np.column_stack([R[:, 0], -R[:, 1], -R[:, 2]])
     q = Rotation.from_matrix(mujoco_cam_mat).as_quat()
@@ -255,9 +257,9 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
             steps_per_waypoint, video_dir, run_name, wandb_run,
             R=DATASET_CAM_FRAME_IN_ROBOT, angle=0.0, elevation=0.0, eef_dir='mz',
             show_eef=False, fovy=60.0, cam_h=480, cam_w=640, data_dir=None,
-            mesh_rot_offset=None, control_freq=20):
+            mesh_rot_offset=None, control_freq=20, use_initial=False):
 
-    cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R)
+    cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R, use_initial=use_initial)
     dataset_cam_key   = f"dataset_cam_{angle:g}_elev{elevation:g}_{eef_dir}"
 
     env = suite.make(
@@ -422,6 +424,8 @@ if __name__ == "__main__":
                         help="reference data dir (e.g. data/ours) whose frame 0 defines the canonical mesh orientation")
     parser.add_argument("--control-freq", type=float, default=cfg.get("control_freq", 10),
                         help="OSC control frequency in Hz (default: 20)")
+    parser.add_argument("--initial",     action="store_true", default=cfg.get("initial", False),
+                        help="anchor traj start (frame 0) to center instead of mean")
     args = parser.parse_args()
 
     _tmp_env = suite.make(
@@ -447,7 +451,7 @@ if __name__ == "__main__":
 
     pos_cam, quat_cam = load_traj(data_dir)
     pos, quat = cam_to_robot(pos_cam, quat_cam, R)
-    pos, quat = remap(pos, quat, center=center, scale=args.scale)
+    pos, quat = remap(pos, quat, center=center, scale=args.scale, use_initial=args.initial)
 
     video_dir = Path(args.video_dir)
     if not video_dir.is_absolute():
@@ -476,6 +480,7 @@ if __name__ == "__main__":
             args.steps, video_dir, run_name, wandb_run, R=R,
             angle=args.angle, elevation=args.elevation, eef_dir=args.eef_dir, show_eef=args.show_eef,
             fovy=fovy, cam_h=cam_h, cam_w=cam_w, data_dir=data_dir,
-            mesh_rot_offset=mesh_rot_offset, control_freq=args.control_freq)
+            mesh_rot_offset=mesh_rot_offset, control_freq=args.control_freq,
+            use_initial=args.initial)
     if wandb_run:
         wandb_run.finish()

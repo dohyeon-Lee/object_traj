@@ -72,8 +72,9 @@ def flange_to_tcp(pos, euler_xyz, d):
     R = Rotation.from_euler("xyz", euler_xyz).as_matrix()
     return pos + d * R[:, 2], euler_xyz
 
-def remap(pos, quat, center=(0.0, 0.0, 1.0), scale=1.0):
-    return (pos - pos.mean(axis=0)) * scale + np.array(center), quat
+def remap(pos, quat, center=(0.0, 0.0, 1.0), scale=1.0, use_initial=False):
+    ref = pos[0] if use_initial else pos.mean(axis=0)
+    return (pos - ref) * scale + np.array(center), quat
 
 def load_traj(data_dir):
     poses = np.load(Path(data_dir) / "object_pose" / "poses.npz")["poses"]
@@ -106,6 +107,8 @@ if __name__ == "__main__":
                         help="gripper approach: 'mz'/'py'/'my' or 'SPH_lat<a>lon<b>[z<c>]' (e.g. 'SPH_lat180lon0' for top-down)")
     parser.add_argument("--tcp-offset", type=float, default=cfg.get("tcp_offset", 0.145),
                         help="distance from flange to gripper tip along flange Z (meters)")
+    parser.add_argument("--initial",    action="store_true", default=cfg.get("initial", False),
+                        help="anchor traj start (frame 0) to center instead of mean")
     args = parser.parse_args()
     
     action_space = "cartesian_position"
@@ -142,7 +145,7 @@ if __name__ == "__main__":
     R = cam_to_robot_matrix(args.angle, args.elevation)
     pos_cam, quat_cam = load_traj(data_dir)
     pos, quat = cam_to_robot(pos_cam, quat_cam, R)
-    pos, quat = remap(pos, quat, center=center, scale=args.scale)
+    pos, quat = remap(pos, quat, center=center, scale=args.scale, use_initial=args.initial)
 
     rot_eef_init      = Rotation.from_euler("xyz", initial_pose[3:])
 
