@@ -263,7 +263,8 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
             R=DATASET_CAM_FRAME_IN_ROBOT, angle=0.0, elevation=0.0, eef_dir='mz',
             show_eef=False, fovy=60.0, cam_h=480, cam_w=640, data_dir=None,
             mesh_rot_offset=None, control_freq=20, use_initial=False,
-            initial_frame=0, dataset_cam_only=False, cam_distance=1.0):
+            initial_frame=0, dataset_cam_only=False, cam_distance=1.0,
+            mesh_scale=1.0):
 
     cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R, use_initial=use_initial, cam_distance=cam_distance)
     dataset_cam_key   = f"dataset_cam_{angle:g}_elev{elevation:g}_{eef_dir}"
@@ -293,7 +294,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     })
     ET.SubElement(worldbody, 'camera', SIDEVIEW_OPP)
     if data_dir is not None:
-        inject_object_xml(root, data_dir)
+        inject_object_xml(root, data_dir, mesh_scale=mesh_scale)
     env._initialize_sim(ET.tostring(root, encoding='unicode'))
     env.reset()
     _set_droid_init_qpos(env)
@@ -408,6 +409,8 @@ if __name__ == "__main__":
                         help="only render dataset_cam video (skip front/bird/sideview)")
     parser.add_argument("--cam-distance", type=float, default=cfg.get("cam_distance", 1.0),
                         help="dataset_cam distance multiplier (>1 = farther, <1 = closer)")
+    parser.add_argument("--mesh-scale", type=float, default=cfg.get("mesh_scale", 1.0),
+                        help="object mesh scale multiplier (e.g. 0.5 = half size)")
     args = parser.parse_args()
 
     _tmp_env = suite.make(
@@ -463,6 +466,7 @@ if __name__ == "__main__":
             fovy=fovy, cam_h=cam_h, cam_w=cam_w, data_dir=data_dir,
             mesh_rot_offset=mesh_rot_offset, control_freq=args.control_freq,
             use_initial=args.initial, initial_frame=initial_frame,
-            dataset_cam_only=args.dataset_cam_only, cam_distance=args.cam_distance)
+            dataset_cam_only=args.dataset_cam_only, cam_distance=args.cam_distance,
+            mesh_scale=args.mesh_scale)
     if wandb_run:
         wandb_run.finish()

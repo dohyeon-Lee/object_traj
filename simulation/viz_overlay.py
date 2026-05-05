@@ -112,7 +112,7 @@ def prepare_mesh(src, dst):
                 fout.write(line)
 
 
-def inject_object_xml(root, data_dir):
+def inject_object_xml(root, data_dir, mesh_scale=1.0):
     """Add textured mesh assets and a mocap body to an MJCF XML tree (in-place)."""
     data_dir  = Path(data_dir)
     mesh_dir  = data_dir / "mesh"
@@ -121,7 +121,11 @@ def inject_object_xml(root, data_dir):
         prepare_mesh(mesh_dir / "textured_simple.obj", clean_obj)
 
     asset = root.find('asset') or ET.SubElement(root, 'asset')
-    ET.SubElement(asset, 'mesh',     {'name': 'obj_mesh', 'file': str(clean_obj)})
+    mesh_attrs = {'name': 'obj_mesh', 'file': str(clean_obj)}
+    if mesh_scale != 1.0:
+        s = f"{mesh_scale} {mesh_scale} {mesh_scale}"
+        mesh_attrs['scale'] = s
+    ET.SubElement(asset, 'mesh', mesh_attrs)
     ET.SubElement(asset, 'texture',  {'name': 'obj_tex',  'type': '2d',
                                       'file': str(mesh_dir / 'texture_map.png')})
     ET.SubElement(asset, 'material', {'name': 'obj_mat', 'texture': 'obj_tex',

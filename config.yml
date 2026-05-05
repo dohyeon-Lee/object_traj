@@ -2,21 +2,23 @@
 # data/035_power_drill_20200709_151335
 
 
+data_dir: data/bob_0      
+angle: 90              
+elevation: 90       
+scale: 0.2              
+eef_dir: SPH_lat160lon45z45
+center_offset: [0.10, 0.0, -0.10]  
+start_frame: 0 
+mesh_scale: 0.2
+
 # data_dir: data/bowl6      
 # angle: 90              
 # elevation: 0       
-# scale: 1              
+# scale: 0.4              
 # eef_dir: SPH_lat165lon90z90
 # center_offset: [0.10, 0.0, 0.05]  
-# start_frame: 25 
-
-data_dir: data/bowl6      
-angle: 90              
-elevation: 0       
-scale: 0.4              
-eef_dir: SPH_lat165lon90z90
-center_offset: [0.10, 0.0, 0.05]  
-start_frame: 25              # anchor traj start (frame 0) to center instead of mean
+# start_frame: 25              # anchor traj start (frame 0) to center instead of mean
+# mesh_scale: 0.5
 
 # data_dir: data/juice 
 # angle: 90                   
@@ -26,11 +28,11 @@ start_frame: 25              # anchor traj start (frame 0) to center instead of 
 # center_offset: [0.1, 0.0, 0.0]  
 
 # Simulation-specific (simulation/main_abs.py)
-steps: 1                     # MuJoCo steps per trajectory waypoint
-control_freq: 50             # OSC control frequency (Hz)
-show_eef: false               # overlay EEF trail and axes on rendered frames
+steps: 2                     # MuJoCo steps per trajectory waypoint
+control_freq: 10             # OSC control frequency (Hz)
+show_eef: true               # overlay EEF trail and axes on rendered frames
 initial: false               # anchor traj start (frame 0) to center instead of mean
 dataset_cam_only: false        # only render dataset camera view (no robot visualization)
-cam_distance: 2                   # dataset camera distance multiplier (>1 = farther, <1 = closer)
+cam_distance: 1                   # dataset camera distance multiplier (>1 = farther, <1 = closer)
 # Deploy-specific (deploy_franka/main.py)
 tcp_offset: 0.145            # flange to gripper tip along flange Z (meters, Robotiq85)
