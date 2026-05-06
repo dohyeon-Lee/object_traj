@@ -242,17 +242,19 @@ def _draw_trajectory(images, poses_cam, K, color, radius=6, trail_len=20, show_e
     return out
 
 
-def make_video(data_dir, fps=10, show_eef=True, start_frame=0):
-    """Generate trajectory.mp4 from dataset RGB frames + pose data."""
+def make_video(data_dir, fps=10, show_eef=True, start_frame=0, out_dir=None, filename="trajectory"):
+    """Generate trajectory video from dataset RGB frames + pose data."""
     data_dir = Path(data_dir)
-    out_dir  = data_dir.parent.parent / "videos" / data_dir.name
+    if out_dir is None:
+        out_dir = data_dir.parent.parent / "videos" / data_dir.name
+    out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     poses, images, K = _load_data(data_dir)
     poses  = poses[start_frame:]
     images = images[start_frame:]
     print(f"[visualize] Loaded {len(poses)} frames from {data_dir.name} (start_frame={start_frame})")
     frames_drawn = _draw_trajectory(images, poses, K, color=(0, 200, 255), show_eef=show_eef)
-    path = str(out_dir / "trajectory.mp4")
+    path = str(out_dir / f"{filename}.mp4")
     imageio.mimwrite(path, frames_drawn, fps=fps, codec="libx264",
                      output_params=["-crf", "18"])
     print(f"[visualize] Saved -> {path}")

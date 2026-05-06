@@ -264,9 +264,10 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
             show_eef=False, fovy=60.0, cam_h=480, cam_w=640, data_dir=None,
             mesh_rot_offset=None, control_freq=20, use_initial=False,
             initial_frame=0, dataset_cam_only=False, cam_distance=1.0,
-            mesh_scale=1.0):
+            mesh_scale=1.0, flat_output=False, gt_pos_cam_raw=None):
 
-    cam_pos, cam_quat = compute_dataset_cam(pos_cam_raw, scale, center, R, use_initial=use_initial, cam_distance=cam_distance)
+    cam_src = gt_pos_cam_raw if (flat_output and gt_pos_cam_raw is not None) else pos_cam_raw
+    cam_pos, cam_quat = compute_dataset_cam(cam_src, scale, center, R, use_initial=use_initial, cam_distance=cam_distance)
     dataset_cam_key   = f"dataset_cam_{angle:g}_elev{elevation:g}_{eef_dir}"
 
     env = suite.make(
@@ -365,19 +366,30 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     for renderer in renderers.values():
         renderer.close()
     env.close()
-    _save(frames, video_dir, run_name, wandb_run)
+    _save(frames, video_dir, run_name, wandb_run, flat_output=flat_output)
 
 
-def _save(frames, video_dir, run_name, wandb_run):
-    out_dir = Path(video_dir) / run_name
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for cam, cam_frames in frames.items():
-        path = str(out_dir / f"{cam}.mp4")
+def _save(frames, video_dir, run_name, wandb_run, flat_output=False):
+    if flat_output and len(frames) == 1:
+        out_dir = Path(video_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        cam, cam_frames = next(iter(frames.items()))
+        path = str(out_dir / f"{run_name}.mp4")
         imageio.mimwrite(path, cam_frames, fps=20, codec="libx264",
                         output_params=["-crf", "18"])
         print(f"Saved {cam} -> {path}")
         if wandb_run:
-            wandb_run.log({f"video/{cam}": wandb.Video(path, fps=20, format="mp4")})
+            wandb_run.log({f"video/{run_name}": wandb.Video(path, fps=20, format="mp4")})
+    else:
+        out_dir = Path(video_dir) / run_name
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for cam, cam_frames in frames.items():
+            path = str(out_dir / f"{cam}.mp4")
+            imageio.mimwrite(path, cam_frames, fps=20, codec="libx264",
+                            output_params=["-crf", "18"])
+            print(f"Saved {cam} -> {path}")
+            if wandb_run:
+                wandb_run.log({f"video/{cam}": wandb.Video(path, fps=20, format="mp4")})
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
@@ -389,7 +401,7 @@ if __name__ == "__main__":
     parser.add_argument("data_dir",    nargs="?", default=cfg.get("data_dir", "data/035_power_drill_20200709_151335"))
     parser.add_argument("--scale",     type=float, default=cfg.get("scale", 1))
     parser.add_argument("--steps",     type=int,   default=cfg.get("steps", 2))
-    parser.add_argument("--video-dir", default="videos")
+    parser.add_argument("--video-dir", default=cfg.get("video_dir", "videos"))
     parser.add_argument("--project",   default="robosuite-eef-traj")
     parser.add_argument("--name",      default=None)
     parser.add_argument("--wandb",     action="store_true")
@@ -407,10 +419,16 @@ if __name__ == "__main__":
                         help="anchor traj start (frame 0) to center instead of mean")
     parser.add_argument("--dataset-cam-only", action="store_true", default=cfg.get("dataset_cam_only", False),
                         help="only render dataset_cam video (skip front/bird/sideview)")
+    parser.add_argument("--flat-output",    action="store_true", default=cfg.get("flat_output", False),
+                        help="with --dataset-cam-only: save {run_name}.mp4 directly into video_dir (no subfolder)")
     parser.add_argument("--cam-distance", type=float, default=cfg.get("cam_distance", 1.0),
                         help="dataset_cam distance multiplier (>1 = farther, <1 = closer)")
     parser.add_argument("--mesh-scale", type=float, default=cfg.get("mesh_scale", 1.0),
                         help="object mesh scale multiplier (e.g. 0.5 = half size)")
+    parser.add_argument("--gt-dir",       default=cfg.get("gt_dir", None),
+                        help="GT data dir; when flat_output, use its cam pos to unify views across methods")
+    parser.add_argument("--no-traj-video", action="store_true", default=False,
+                        help="skip trajectory.mp4 generation (used by run_batch.py for non-GT runs)")
     args = parser.parse_args()
 
     _tmp_env = suite.make(
@@ -447,7 +465,13 @@ if __name__ == "__main__":
     cam_w    = cam_json["width"]
     fovy     = math.degrees(2 * math.atan(cam_h / (2 * cam_json["intrinsics"][1][1])))
 
-    make_video(data_dir, show_eef=args.show_eef, start_frame=initial_frame)
+    if not args.no_traj_video:
+        if args.flat_output:
+            make_video(data_dir, show_eef=args.show_eef, start_frame=initial_frame,
+                       out_dir=video_dir, filename=f"{run_name}_traj")
+        else:
+            make_video(data_dir, show_eef=args.show_eef, start_frame=initial_frame,
+                       out_dir=video_dir / run_name)
 
     # mesh orientation correction: align frame-0 body frame to reference canonical pose
     mesh_rot_offset = None
@@ -459,6 +483,13 @@ if __name__ == "__main__":
         R_cur  = np.load(data_dir / "object_pose" / "poses.npz")["poses"][0, :3, :3].astype(float)
         mesh_rot_offset = Rotation.from_matrix(R_ref.T @ R_cur)
 
+    gt_pos_cam_raw = None
+    if args.flat_output and args.gt_dir is not None:
+        gt_dir = Path(args.gt_dir)
+        if not gt_dir.is_absolute():
+            gt_dir = PROJECT_ROOT / gt_dir
+        gt_pos_cam_raw, _ = load_traj(gt_dir)
+
     wandb_run = wandb.init(project=args.project, name=run_name) if args.wandb else None
     run_sim(pos, quat, pos_cam, args.scale, center,
             args.steps, video_dir, run_name, wandb_run, R=R,
@@ -467,6 +498,7 @@ if __name__ == "__main__":
             mesh_rot_offset=mesh_rot_offset, control_freq=args.control_freq,
             use_initial=args.initial, initial_frame=initial_frame,
             dataset_cam_only=args.dataset_cam_only, cam_distance=args.cam_distance,
-            mesh_scale=args.mesh_scale)
+            mesh_scale=args.mesh_scale, flat_output=args.flat_output,
+            gt_pos_cam_raw=gt_pos_cam_raw)
     if wandb_run:
         wandb_run.finish()
