@@ -1,10 +1,71 @@
 # Shared between simulation/main_abs.py and deploy_franka/main.py
+# data/035_power_drill_20200709_151335
 
-# dexycb/20200820_144100
-# dexycb/20200918_115450
-# oakink/C40001_0001_0000_north_east
-# oakink/C24001_0001_0009_north_east
-# ho3d/
+
+# data_dir: data/pour_into_6685_ego      
+# angle: 90              
+# elevation: 0       
+# scale: 1           
+# eef_dir: mz
+# center_offset: [0.0, 0.0, 0.0]  
+# start_frame: 0 
+# mesh_scale: 1
+
+# # data_dir: data/bob_0      
+# # angle: 90              
+# # elevation: 90       
+# # scale: 0.2              
+# # eef_dir: SPH_lat160lon45z45
+# # center_offset: [0.10, 0.0, -0.10]  
+# # start_frame: 0 
+# # mesh_scale: 0.2
+
+# # data_dir: data/bowl6      
+# # angle: 90              
+# # elevation: 0       
+# # scale: 0.4              
+# # eef_dir: SPH_lat165lon90z90
+# # center_offset: [0.10, 0.0, 0.05]  
+# # start_frame: 25              # anchor traj start (frame 0) to center instead of mean
+# # mesh_scale: 0.5
+
+# # data_dir: data/juice 
+# # angle: 90                   
+# # elevation: 0               
+# # scale: 1.0                   
+# # eef_dir: SPH_lat90lon-70z30              
+# # center_offset: [0.1, 0.0, 0.0]  
+
+# # Simulation-specific (simulation/main_abs.py)
+# steps: 2                     # MuJoCo steps per trajectory waypoint
+# control_freq: 10             # OSC control frequency (Hz)
+# show_eef: true               # overlay EEF trail and axes on rendered frames
+# initial: false               # anchor traj start (frame 0) to center instead of mean
+# dataset_cam_only: false        # only render dataset camera view (no robot visualization)
+# cam_distance: 1                   # dataset camera distance multiplier (>1 = farther, <1 = closer)
+# # Deploy-specific (deploy_franka/main.py)
+# tcp_offset: 0.145            # flange to gripper tip along flange Z (meters, Robotiq85)
+# flat_output: false 
+
+
+# # Shared between simulation/main_abs.py and deploy_franka/main.py
+
+# # dexycb/20200820_144100
+# # dexycb/20200918_115450
+# # oakink/C40001_0001_0000_north_east
+# # oakink/C24001_0001_0009_north_east
+# # ho3d/
+
+# # batch_dir: data/dexycb/20200820_144100 # 20200820_144100    # run_batch.py가 이 폴더 내 서브폴더 전체를 순회
+# # video_dir: videos/dexycb/20200820_144100                    # output video folder (created if missing)
+# # gt_dir: data/dexycb/20200820_144100/gt # ~                  # GT data dir for unified cam view (e.g. data/dexycb/20200918_115450/gt); ~ = disabled
+# # angle: 90              
+# # elevation: 0       
+# # scale: 1           
+# # eef_dir: mz
+# # center_offset: [0.0, 0.0, 0.0]  
+# # start_frame: 0 
+# # mesh_scale: 1
 
 # batch_dir: data/dexycb/20200820_144100 # 20200820_144100    # run_batch.py가 이 폴더 내 서브폴더 전체를 순회
 # video_dir: videos/dexycb/20200820_144100                    # output video folder (created if missing)
@@ -17,30 +78,19 @@
 # start_frame: 0 
 # mesh_scale: 1
 
-batch_dir: data/dexycb/20200820_144100 # 20200820_144100    # run_batch.py가 이 폴더 내 서브폴더 전체를 순회
-video_dir: videos/dexycb/20200820_144100                    # output video folder (created if missing)
-gt_dir: data/dexycb/20200820_144100/gt # ~                  # GT data dir for unified cam view (e.g. data/dexycb/20200918_115450/gt); ~ = disabled
-angle: 90              
-elevation: 0       
-scale: 1           
-eef_dir: mz
-center_offset: [0.0, 0.0, 0.0]  
-start_frame: 0 
-mesh_scale: 1
+# # Simulation-specific (simulation/main_abs.py)
+# steps: 2                        # MuJoCo steps per trajectory waypoint
+# control_freq: 10                # OSC control frequency (Hz)
+# show_eef: false                 # overlay EEF trail and axes on rendered frames
+# initial: true                   # anchor traj start (frame 0) to center instead of mean
+# dataset_cam_only: true          # only render dataset camera view (no robot visualization)
+# flat_output: true               # save {run_name}.mp4 directly into video_dir (no subfolder)
+# concat_order: [gt, megapose, foundpose, freepose, unihope, ours]  # horizontal concat order
+# label_overrides:             # display name overrides (folder name -> label)
+#   foundpose: foundationpose
+# concat_only: false            # true = skip simulations, only regenerate concat videos
+# show_labels: true            # show method name labels below each video column
+# cam_distance: 1                 # dataset camera distance multiplier (>1 = farther, <1 = closer)
 
-# Simulation-specific (simulation/main_abs.py)
-steps: 2                        # MuJoCo steps per trajectory waypoint
-control_freq: 10                # OSC control frequency (Hz)
-show_eef: false                 # overlay EEF trail and axes on rendered frames
-initial: true                   # anchor traj start (frame 0) to center instead of mean
-dataset_cam_only: true          # only render dataset camera view (no robot visualization)
-flat_output: true               # save {run_name}.mp4 directly into video_dir (no subfolder)
-concat_order: [gt, megapose, foundpose, freepose, unihope, ours]  # horizontal concat order
-label_overrides:             # display name overrides (folder name -> label)
-  foundpose: foundationpose
-concat_only: false            # true = skip simulations, only regenerate concat videos
-show_labels: true            # show method name labels below each video column
-cam_distance: 1                 # dataset camera distance multiplier (>1 = farther, <1 = closer)
-
-# Deploy-specific (deploy_franka/main.py)
-tcp_offset: 0.145               # flange to gripper tip along flange Z (meters, Robotiq85)
+# # Deploy-specific (deploy_franka/main.py)
+# tcp_offset: 0.145               # flange to gripper tip along flange Z (meters, Robotiq85)
