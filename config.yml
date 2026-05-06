@@ -2,14 +2,23 @@
 # data/035_power_drill_20200709_151335
 
 
-data_dir: data/bob_0      
+data_dir: data/bob_3_new      
 angle: 90              
-elevation: 90       
-scale: 0.2              
+elevation: 0       
+scale: 0.5           
 eef_dir: SPH_lat160lon45z45
 center_offset: [0.10, 0.0, -0.10]  
 start_frame: 0 
-mesh_scale: 0.2
+mesh_scale: 1
+
+# data_dir: data/bob_0      
+# angle: 90              
+# elevation: 90       
+# scale: 0.2              
+# eef_dir: SPH_lat160lon45z45
+# center_offset: [0.10, 0.0, -0.10]  
+# start_frame: 0 
+# mesh_scale: 0.2
 
 # data_dir: data/bowl6      
 # angle: 90              
