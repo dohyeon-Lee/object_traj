@@ -17,9 +17,9 @@
 # start_frame: 0 
 # mesh_scale: 1
 
-batch_dir: data/dexycb/20200918_115450 # 20200820_144100    # run_batch.py가 이 폴더 내 서브폴더 전체를 순회
-video_dir: videos/dexycb/20200918_115450                    # output video folder (created if missing)
-gt_dir: data/dexycb/20200918_115450/gt # ~                  # GT data dir for unified cam view (e.g. data/dexycb/20200918_115450/gt); ~ = disabled
+batch_dir: data/dexycb/20200820_144100 # 20200820_144100    # run_batch.py가 이 폴더 내 서브폴더 전체를 순회
+video_dir: videos/dexycb/20200820_144100                    # output video folder (created if missing)
+gt_dir: data/dexycb/20200820_144100/gt # ~                  # GT data dir for unified cam view (e.g. data/dexycb/20200918_115450/gt); ~ = disabled
 angle: 90              
 elevation: 0       
 scale: 1           
@@ -35,6 +35,11 @@ show_eef: false                 # overlay EEF trail and axes on rendered frames
 initial: true                   # anchor traj start (frame 0) to center instead of mean
 dataset_cam_only: true          # only render dataset camera view (no robot visualization)
 flat_output: true               # save {run_name}.mp4 directly into video_dir (no subfolder)
+concat_order: [gt, megapose, foundpose, freepose, unihope, ours]  # horizontal concat order
+label_overrides:             # display name overrides (folder name -> label)
+  foundpose: foundationpose
+concat_only: false            # true = skip simulations, only regenerate concat videos
+show_labels: true            # show method name labels below each video column
 cam_distance: 1                 # dataset camera distance multiplier (>1 = farther, <1 = closer)
 
 # Deploy-specific (deploy_franka/main.py)
