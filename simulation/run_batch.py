@@ -3,11 +3,11 @@ Run simulation/main_abs.py for every method subfolder inside a parent directory,
 then concatenate results horizontally.
 
 Usage (from project root, with venv active):
-    python simulation/run_batch.py data/dexycb/20200820_144100
+    python simulation/run_batch.py [--concat-only] [--show-labels] [<parent_dir>]
 
-Config (config.yml) is shared as-is. Only data_dir, video_dir, and gt_dir are
-overridden per run. If gt_dir is set in config, that specific subfolder is used
-as the camera reference for ALL runs.
+Config files:
+  config.yml        – shared settings; add  use_proxddp: true  to use optimized freepose
+  config_proxddp.yml – ProxDDP weights, python path, compare_freepose option
 """
 
 import subprocess
@@ -21,6 +21,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+# ── config loading ─────────────────────────────────────────────────────────────
+
 def _load_config():
     path = PROJECT_ROOT / "config.yml"
     if not path.exists():
@@ -33,8 +35,16 @@ def _load_config():
     return {k: _sub(v) for k, v in cfg.items()}
 
 
+def _load_proxddp_config():
+    path = PROJECT_ROOT / "config_proxddp.yml"
+    if not path.exists():
+        return {}
+    return yaml.safe_load(path.read_text()) or {}
+
+
+# ── video helpers ──────────────────────────────────────────────────────────────
+
 def _resample(frames, target_n):
-    """Nearest-neighbor temporal resample to target_n frames."""
     n = len(frames)
     if n == target_n:
         return frames
@@ -43,7 +53,6 @@ def _resample(frames, target_n):
 
 
 def _make_label_bar(width, label, bar_h=55, font_size=40):
-    """Black bar with centered white label text."""
     from PIL import Image, ImageDraw, ImageFont
     bar = Image.new("RGB", (width, bar_h), color=(0, 0, 0))
     draw = ImageDraw.Draw(bar)
@@ -58,12 +67,13 @@ def _make_label_bar(width, label, bar_h=55, font_size=40):
 
 
 def concat_horizontal(video_paths, out_path, fps=20, show_labels=False, labels=None):
-    """Stack videos side by side, resampled to the same frame count, and save."""
+    """Stack videos side by side (resampled to same frame count) and save."""
     print(f"\nConcatenating {len(video_paths)} videos -> {out_path}")
     for p in video_paths:
         print(f"  {'[OK]' if p.exists() else '[MISSING]'} {p.name}")
 
-    existing_pairs = [(p, (labels[i] if labels else p.stem)) for i, p in enumerate(video_paths) if p.exists()]
+    existing_pairs = [(p, (labels[i] if labels else p.stem))
+                      for i, p in enumerate(video_paths) if p.exists()]
     if not existing_pairs:
         print("  No videos found, skipping.")
         return
@@ -71,28 +81,23 @@ def concat_horizontal(video_paths, out_path, fps=20, show_labels=False, labels=N
     names    = [n for _, n in existing_pairs]
 
     all_frames = [imageio.mimread(str(p), memtest=False) for p in existing]
-
-    # Use maximum frame count as target so no video is clipped
-    n_frames = max(len(f) for f in all_frames)
+    n_frames   = max(len(f) for f in all_frames)
     all_frames = [_resample(f, n_frames) for f in all_frames]
 
-    # Resize all to same height (use first video's height as reference)
-    h_ref = all_frames[0][0].shape[0]
+    h_ref  = all_frames[0][0].shape[0]
     resized = []
     for frames in all_frames:
         h, w = frames[0].shape[:2]
         if h != h_ref:
             import cv2
-            scale = h_ref / h
-            new_w = int(w * scale)
+            new_w = int(w * h_ref / h)
             frames = [cv2.resize(f, (new_w, h_ref)) for f in frames]
         resized.append(frames)
 
-    # Optionally attach label bar below each video column
     if show_labels:
         labeled = []
         for frames, name in zip(resized, names):
-            w = frames[0].shape[1]
+            w   = frames[0].shape[1]
             bar = _make_label_bar(w, name)
             labeled.append([np.concatenate([f, bar], axis=0) for f in frames])
         resized = labeled
@@ -104,16 +109,85 @@ def concat_horizontal(video_paths, out_path, fps=20, show_labels=False, labels=N
     print(f"  Saved -> {out_path}")
 
 
+# ── ProxDDP optimization ───────────────────────────────────────────────────────
+
+def _run_proxddp(proxddp_cfg: dict, data_dir: Path) -> Path:
+    """Run optimize_traj.py on <data_dir>/object_pose/poses.npz.
+
+    Writes poses_proxddp.npz to the same folder and returns its path.
+    """
+    proxddp_python  = proxddp_cfg.get("proxddp_python",
+                                      "/home/dohyeon/miniconda3/envs/proxddp2/bin/python")
+    optimize_script = Path(__file__).parent / "optimize_traj.py"
+    poses_in  = data_dir / "object_pose" / "poses.npz"
+    poses_out = data_dir / "object_pose" / "poses_proxddp.npz"
+
+    cmd = [
+        proxddp_python, str(optimize_script),
+        str(poses_in), str(poses_out),
+        "--w-d",   str(proxddp_cfg.get("w_d",   10.0)),
+        "--w-dq",  str(proxddp_cfg.get("w_dq",  0.01)),
+        "--w-tau", str(proxddp_cfg.get("w_tau",  0.001)),
+        "--dt",    str(proxddp_cfg.get("dt",     0.1)),
+    ]
+    print(f"[proxddp] Optimizing {data_dir.name} ...")
+    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+    if result.returncode != 0:
+        raise RuntimeError(f"ProxDDP optimization failed for {data_dir}")
+    return poses_out
+
+
+# ── simulation runner ──────────────────────────────────────────────────────────
+
+def _build_base_cmd(script, rel_data, video_base, gt_dir, is_gt):
+    """Build the common main_abs.py command for a given subdir."""
+    cmd = [
+        sys.executable, str(script),
+        str(rel_data),
+        "--video-dir", str(video_base.relative_to(PROJECT_ROOT)),
+    ]
+    if gt_dir is not None:
+        try:
+            gt_rel = str(gt_dir.relative_to(PROJECT_ROOT))
+        except ValueError:
+            gt_rel = str(gt_dir)
+        cmd += ["--gt-dir", gt_rel, "--mesh-dir", gt_rel]
+    if not is_gt:
+        cmd += ["--no-traj-video"]
+    return cmd
+
+
+def _run_sim(cmd, label, failed):
+    print(f"{'='*60}")
+    print(f"Running: {label}")
+    print(f"  cmd: {' '.join(cmd)}")
+    print(f"{'='*60}")
+    result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+    ok = result.returncode == 0
+    print(f"[{'OK' if ok else 'FAILED'}] {label}")
+    print()
+    if not ok:
+        failed.append(label)
+    return ok
+
+
+# ── main ───────────────────────────────────────────────────────────────────────
+
 def main():
-    cfg = _load_config()
-    concat_only  = "--concat-only"  in sys.argv or cfg.get("concat_only", False)
-    show_labels  = "--show-labels"  in sys.argv or cfg.get("show_labels", False)
+    cfg          = _load_config()
+    proxddp_cfg  = _load_proxddp_config()
+
+    concat_only      = "--concat-only" in sys.argv or cfg.get("concat_only", False)
+    show_labels      = "--show-labels" in sys.argv or cfg.get("show_labels", False)
+    use_proxddp      = cfg.get("use_proxddp", False)
+    compare_freepose = proxddp_cfg.get("compare_freepose", False)
+
     clean_argv = [a for a in sys.argv[1:] if a not in ("--concat-only", "--show-labels")]
 
     if not clean_argv:
         parent_str = cfg.get("batch_dir") or cfg.get("data_dir")
         if parent_str is None:
-            print("Usage: python run_batch.py [--concat-only] <parent_dir>")
+            print("Usage: python run_batch.py [--concat-only] [--show-labels] <parent_dir>")
             sys.exit(1)
         parent_dir = PROJECT_ROOT / parent_str
         if not parent_dir.is_dir() or not any(d.is_dir() for d in parent_dir.iterdir()):
@@ -154,18 +228,19 @@ def main():
             rel = Path(parent_dir.name)
         video_base = PROJECT_ROOT / "videos" / rel
 
-    # concat_order: from config or default alphabetical
     concat_order    = cfg.get("concat_order") or [d.name for d in subdirs]
     label_overrides = cfg.get("label_overrides") or {}
 
     def _label(name):
         return label_overrides.get(name, name)
 
-    print(f"Parent dir   : {parent_dir}")
-    print(f"Video base   : {video_base}")
-    print(f"GT dir       : {gt_dir or '(none)'}")
-    print(f"Methods      : {[d.name for d in subdirs]}")
-    print(f"Concat order : {concat_order}")
+    print(f"Parent dir       : {parent_dir}")
+    print(f"Video base       : {video_base}")
+    print(f"GT dir           : {gt_dir or '(none)'}")
+    print(f"Methods          : {[d.name for d in subdirs]}")
+    print(f"Concat order     : {concat_order}")
+    print(f"use_proxddp      : {use_proxddp}")
+    print(f"compare_freepose : {compare_freepose}")
     print()
 
     if concat_only:
@@ -176,62 +251,65 @@ def main():
 
         for subdir in subdirs:
             rel_data = subdir.relative_to(PROJECT_ROOT)
+            is_gt    = (gt_dir is not None and subdir.resolve() == gt_dir.resolve())
+            is_fp    = (subdir.name == "freepose")
+            base_cmd = _build_base_cmd(script, rel_data, video_base, gt_dir, is_gt)
 
-            cmd = [
-                sys.executable, str(script),
-                str(rel_data),
-                "--video-dir", str(video_base.relative_to(PROJECT_ROOT)),
-            ]
-            if gt_dir is not None:
+            needs_opt = is_fp and (use_proxddp or compare_freepose)
+
+            if needs_opt:
                 try:
-                    cmd += ["--gt-dir", str(gt_dir.relative_to(PROJECT_ROOT))]
-                except ValueError:
-                    cmd += ["--gt-dir", str(gt_dir)]
+                    _run_proxddp(proxddp_cfg, subdir)
+                except Exception as e:
+                    print(f"[FAILED] ProxDDP optimization: {e}")
+                    failed.append(f"{subdir.name}(proxddp)")
 
-            is_gt = (gt_dir is not None and subdir.resolve() == gt_dir.resolve())
-            if not is_gt:
-                cmd += ["--no-traj-video"]
-
-            print(f"{'='*60}")
-            print(f"Running: {subdir.name}")
-            print(f"  cmd: {' '.join(cmd)}")
-            print(f"{'='*60}")
-
-            result = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
-            if result.returncode != 0:
-                print(f"[FAILED] {subdir.name} (exit {result.returncode})")
-                failed.append(subdir.name)
+            if is_fp and compare_freepose:
+                # Run original  → freepose_orig.mp4
+                _run_sim(base_cmd + ["--name", "freepose_orig"],
+                         "freepose_orig", failed)
+                # Run optimized → freepose_proxddp.mp4
+                _run_sim(base_cmd + ["--poses-file", "poses_proxddp.npz",
+                                     "--name", "freepose_proxddp"],
+                         "freepose_proxddp", failed)
+            elif is_fp and use_proxddp:
+                # Normal batch run with optimized poses → freepose.mp4
+                _run_sim(base_cmd + ["--poses-file", "poses_proxddp.npz"],
+                         subdir.name, failed)
             else:
-                print(f"[OK] {subdir.name}")
-            print()
+                _run_sim(base_cmd, subdir.name, failed)
 
         print("=" * 60)
         if failed:
             print(f"Runs done. Failed: {failed}")
         else:
-            print(f"All {len(subdirs)} runs completed.")
+            print(f"All runs completed.")
 
-    # ── concat sim videos ──────────────────────────────────────────────────────
-    gt_name = gt_dir.name if gt_dir else None
-    sim_paths  = [video_base / f"{name}.mp4" for name in concat_order]
-    sim_labels = [_label(n) for n in concat_order]
-    concat_horizontal(sim_paths, video_base / "concat_sim.mp4",
-                      show_labels=show_labels, labels=sim_labels)
+    # ── resolve which file represents "freepose" in the main concat ───────────
+    def _sim_path(name):
+        if name == "freepose" and compare_freepose:
+            # use optimized side if use_proxddp, else original side
+            stem = "freepose_proxddp" if use_proxddp else "freepose_orig"
+            return video_base / f"{stem}.mp4"
+        return video_base / f"{name}.mp4"
 
-    # ── concat traj + sim videos of non-gt methods (gt_traj | megapose | ... | ours) ──
-    traj_first  = video_base / f"{gt_name}_traj.mp4" if gt_name else None
-    rest_paths  = [video_base / f"{name}.mp4" for name in concat_order if name != gt_name]
-    rest_labels = [_label(n) for n in concat_order if n != gt_name]
-    traj_paths  = ([traj_first] if traj_first else []) + rest_paths
-    traj_labels = (["rgb"] if traj_first else []) + rest_labels
-    concat_horizontal(traj_paths, video_base / "concat_traj.mp4",
-                      show_labels=show_labels, labels=traj_labels)
-
-    # ── concat traj + ALL sim videos (gt_traj | gt | megapose | ... | ours) ───
+    # ── concat: traj + ALL sim videos ─────────────────────────────────────────
+    gt_name         = gt_dir.name if gt_dir else None
+    sim_paths       = [_sim_path(n) for n in concat_order]
+    sim_labels      = [_label(n) for n in concat_order]
+    traj_first      = video_base / f"{gt_name}_traj.mp4" if gt_name else None
     traj_all_paths  = ([traj_first] if traj_first else []) + sim_paths
     traj_all_labels = (["rgb"] if traj_first else []) + sim_labels
     concat_horizontal(traj_all_paths, video_base / "concat_traj_all.mp4",
                       show_labels=show_labels, labels=traj_all_labels)
+
+    # ── compare_freepose: original | optimized side-by-side ───────────────────
+    if compare_freepose:
+        fp_orig = video_base / "freepose_orig.mp4"
+        fp_opt  = video_base / "freepose_proxddp.mp4"
+        concat_horizontal([fp_orig, fp_opt], video_base / "freepose_compare.mp4",
+                          show_labels=show_labels,
+                          labels=["freepose (original)", "freepose (proxddp)"])
 
     print("\nAll done.")
 

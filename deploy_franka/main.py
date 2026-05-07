@@ -66,7 +66,11 @@ def remap(pos, quat, center=(0.0, 0.0, 1.0), scale=1.0, use_initial=False):
     return (pos - ref) * scale + np.array(center), quat
 
 def load_traj(data_dir):
-    poses = np.load(Path(data_dir) / "object_pose" / "poses.npz")["poses"]
+    npz = np.load(Path(data_dir) / "object_pose" / "poses.npz")
+    key = next((k for k in ["poses", "poses_cam"] if k in npz.files), None)
+    if key is None:
+        raise KeyError(f"No known pose key in {npz.files}. Expected 'poses' or 'poses_cam'.")
+    poses = npz[key]
     return poses[:, :3, 3], Rotation.from_matrix(poses[:, :3, :3]).as_quat()
 
 def run(env, pose6, step=1, grip_close=False, hz=10):

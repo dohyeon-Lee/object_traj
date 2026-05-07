@@ -66,7 +66,7 @@ CAMERAS     = ["frontview", "birdview", "sideview_opp"]
 DATASET_CAM = "dataset_cam"
 SIDEVIEW_OPP = {
     "name": "sideview_opp",
-    "pos":  "-0.056518 -1.276122 1.487957",
+    "pos":  "-0.056518 -1.276122 1.650000",
     "quat": "-0.806418 -0.591223 0.006878 0.009905",
 }
 
@@ -122,9 +122,22 @@ def _parse_eef_dir(s):
 
 # ── data loading + transforms ─────────────────────────────────────────────────
 
-def load_traj(data_dir):
-    poses = np.load(Path(data_dir) / "object_pose" / "poses.npz")["poses"]
+def load_traj(data_dir, poses_file="poses.npz"):
+    npz = np.load(Path(data_dir) / "object_pose" / poses_file)
+    key = next((k for k in ["poses", "poses_world"] if k in npz.files), None)
+    if key is None:
+        raise KeyError(f"No known pose key in {npz.files}. Expected 'poses' or 'poses_world'.")
+    poses = npz[key]
     return poses[:, :3, 3], Rotation.from_matrix(poses[:, :3, :3]).as_quat()
+
+
+def load_cam_raw(data_dir, poses_file="poses.npz"):
+    """Return poses_cam positions for camera placement (trajectory.mp4 / dataset cam)."""
+    npz = np.load(Path(data_dir) / "object_pose" / poses_file)
+    key = next((k for k in ["poses", "poses_cam"] if k in npz.files), None)
+    if key is None:
+        return None
+    return npz[key][:, :3, 3]
 
 
 def cam_to_robot_matrix(angle_deg, elevation_deg=0.0, R0=DATASET_CAM_FRAME_IN_ROBOT):
@@ -153,12 +166,13 @@ def compute_dataset_cam(pos_cam_raw, scale, center, R, use_initial=False, cam_di
     return cam_pos, np.array([q[3], q[0], q[1], q[2]])
 
 
-def _hide_default_lift_props(root):
-    """Hide Lift table and cube without deleting them (robosuite references their names)."""
-    hide_prefixes = ("table_", "cube_g0")
+_WOOD_RGBA = "0.59 0.38 0.17 1"
+
+def _configure_lift_props(root, show_table=False):
+    """Hide red cube always; hide or wood-color the table depending on show_table."""
     for geom in root.findall(".//geom"):
         name = geom.get("name", "")
-        if name.startswith(hide_prefixes):
+        if name.startswith("cube_g0"):
             rgba = geom.get("rgba", "1 1 1 1").split()
             if len(rgba) != 4:
                 rgba = ["1", "1", "1", "1"]
@@ -166,6 +180,17 @@ def _hide_default_lift_props(root):
             geom.set("rgba", " ".join(rgba))
             geom.set("contype", "0")
             geom.set("conaffinity", "0")
+        elif name.startswith("table_"):
+            if show_table:
+                geom.set("rgba", _WOOD_RGBA)
+            else:
+                rgba = geom.get("rgba", "1 1 1 1").split()
+                if len(rgba) != 4:
+                    rgba = ["1", "1", "1", "1"]
+                rgba[3] = "0"
+                geom.set("rgba", " ".join(rgba))
+                geom.set("contype", "0")
+                geom.set("conaffinity", "0")
 
 
 def _set_white_background(root):
@@ -264,7 +289,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
             show_eef=False, fovy=60.0, cam_h=480, cam_w=640, data_dir=None,
             mesh_rot_offset=None, control_freq=20, use_initial=False,
             initial_frame=0, dataset_cam_only=False, cam_distance=1.0,
-            mesh_scale=1.0, flat_output=False, gt_pos_cam_raw=None):
+            mesh_scale=1.0, flat_output=False, gt_pos_cam_raw=None, show_table=False):
 
     cam_src = gt_pos_cam_raw if (flat_output and gt_pos_cam_raw is not None) else pos_cam_raw
     cam_pos, cam_quat = compute_dataset_cam(cam_src, scale, center, R, use_initial=use_initial, cam_distance=cam_distance)
@@ -283,7 +308,7 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     # Inject dataset camera and object mesh, then recompile
     root = ET.fromstring(env.model.get_xml())
     _set_offscreen_framebuffer(root, cam_w, cam_h)
-    _hide_default_lift_props(root)
+    _configure_lift_props(root, show_table=show_table)
     _set_white_background(root)
     _hide_robot_mount_and_floor(root)
     worldbody = root.find('worldbody')
@@ -369,6 +394,26 @@ def run_sim(pos, quat, pos_cam_raw, scale, center,
     _save(frames, video_dir, run_name, wandb_run, flat_output=flat_output)
 
 
+def _make_combined(traj_path, sim_path, out_path, fps=20):
+    """Horizontally concatenate trajectory.mp4 and dataset_cam.mp4 into one video."""
+    frames_a = imageio.mimread(str(traj_path), memtest=False)
+    frames_b = imageio.mimread(str(sim_path),  memtest=False)
+    na, nb = len(frames_a), len(frames_b)
+    if na != nb:
+        longer, shorter_list = (frames_b, frames_a) if nb > na else (frames_a, frames_b)
+        n = max(na, nb)
+        indices = np.round(np.linspace(0, len(shorter_list) - 1, n)).astype(int)
+        resampled = [shorter_list[i] for i in indices]
+        if nb > na:
+            frames_a, frames_b = resampled, longer
+        else:
+            frames_a, frames_b = longer, resampled
+    combined = [np.concatenate([a, b], axis=1) for a, b in zip(frames_a, frames_b)]
+    imageio.mimwrite(str(out_path), combined, fps=fps, codec="libx264",
+                     output_params=["-crf", "18"])
+    print(f"Saved combined -> {out_path}")
+
+
 def _save(frames, video_dir, run_name, wandb_run, flat_output=False):
     if flat_output and len(frames) == 1:
         out_dir = Path(video_dir)
@@ -425,10 +470,16 @@ if __name__ == "__main__":
                         help="dataset_cam distance multiplier (>1 = farther, <1 = closer)")
     parser.add_argument("--mesh-scale", type=float, default=cfg.get("mesh_scale", 1.0),
                         help="object mesh scale multiplier (e.g. 0.5 = half size)")
+    parser.add_argument("--mesh-dir",   default=cfg.get("mesh_dir", None),
+                        help="override mesh source dir (default: data_dir). Use GT dir to unify mesh across methods.")
+    parser.add_argument("--show-table", action="store_true", default=cfg.get("show_table", False),
+                        help="show the robosuite Lift table in rendered frames")
     parser.add_argument("--gt-dir",       default=cfg.get("gt_dir", None),
                         help="GT data dir; when flat_output, use its cam pos to unify views across methods")
     parser.add_argument("--no-traj-video", action="store_true", default=False,
                         help="skip trajectory.mp4 generation (used by run_batch.py for non-GT runs)")
+    parser.add_argument("--poses-file", default=cfg.get("poses_file", "poses.npz"),
+                        help="npz filename inside object_pose/ (default: poses.npz)")
     args = parser.parse_args()
 
     _tmp_env = suite.make(
@@ -452,8 +503,9 @@ if __name__ == "__main__":
     run_name  = args.name or data_dir.name
     R         = cam_to_robot_matrix(args.angle, args.elevation)
 
-    pos_cam, quat_cam = load_traj(data_dir)
-    pos, quat = cam_to_robot(pos_cam, quat_cam, R)
+    pos_world, quat_world = load_traj(data_dir, args.poses_file)
+    pos_cam_raw = load_cam_raw(data_dir, args.poses_file)
+    pos, quat = cam_to_robot(pos_world, quat_world, R)
     pos, quat = remap(pos, quat, center=center, scale=args.scale, use_initial=args.initial)
 
     video_dir = Path(args.video_dir)
@@ -466,12 +518,15 @@ if __name__ == "__main__":
     fovy     = math.degrees(2 * math.atan(cam_h / (2 * cam_json["intrinsics"][1][1])))
 
     if not args.no_traj_video:
-        if args.flat_output:
-            make_video(data_dir, show_eef=args.show_eef, start_frame=initial_frame,
-                       out_dir=video_dir, filename=f"{run_name}_traj")
-        else:
-            make_video(data_dir, show_eef=args.show_eef, start_frame=initial_frame,
-                       out_dir=video_dir / run_name)
+        try:
+            if args.flat_output:
+                make_video(data_dir, show_eef=args.show_eef, start_frame=initial_frame,
+                           out_dir=video_dir, filename=f"{run_name}_traj")
+            else:
+                make_video(data_dir, show_eef=args.show_eef, start_frame=initial_frame,
+                           out_dir=video_dir / run_name)
+        except Exception as e:
+            print(f"[WARN] make_video failed, skipping trajectory.mp4: {e}")
 
     # mesh orientation correction: align frame-0 body frame to reference canonical pose
     mesh_rot_offset = None
@@ -488,17 +543,28 @@ if __name__ == "__main__":
         gt_dir = Path(args.gt_dir)
         if not gt_dir.is_absolute():
             gt_dir = PROJECT_ROOT / gt_dir
-        gt_pos_cam_raw, _ = load_traj(gt_dir)
+        gt_pos_cam_raw = load_cam_raw(gt_dir)
+
+    mesh_dir = Path(args.mesh_dir) if args.mesh_dir else data_dir
+    if not mesh_dir.is_absolute():
+        mesh_dir = PROJECT_ROOT / mesh_dir
 
     wandb_run = wandb.init(project=args.project, name=run_name) if args.wandb else None
-    run_sim(pos, quat, pos_cam, args.scale, center,
+    run_sim(pos, quat, pos_cam_raw, args.scale, center,
             args.steps, video_dir, run_name, wandb_run, R=R,
             angle=args.angle, elevation=args.elevation, eef_dir=args.eef_dir, show_eef=args.show_eef,
-            fovy=fovy, cam_h=cam_h, cam_w=cam_w, data_dir=data_dir,
+            fovy=fovy, cam_h=cam_h, cam_w=cam_w, data_dir=mesh_dir,
             mesh_rot_offset=mesh_rot_offset, control_freq=args.control_freq,
             use_initial=args.initial, initial_frame=initial_frame,
             dataset_cam_only=args.dataset_cam_only, cam_distance=args.cam_distance,
             mesh_scale=args.mesh_scale, flat_output=args.flat_output,
-            gt_pos_cam_raw=gt_pos_cam_raw)
+            gt_pos_cam_raw=gt_pos_cam_raw, show_table=args.show_table)
     if wandb_run:
         wandb_run.finish()
+
+    if not args.flat_output and not args.no_traj_video:
+        dataset_cam_key = f"dataset_cam_{args.angle:g}_elev{args.elevation:g}_{args.eef_dir}"
+        traj_path = video_dir / run_name / "trajectory.mp4"
+        sim_path  = video_dir / run_name / f"{dataset_cam_key}.mp4"
+        if traj_path.exists() and sim_path.exists():
+            _make_combined(traj_path, sim_path, video_dir / run_name / "combined.mp4")

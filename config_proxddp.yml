@@ -1,0 +1,14 @@
+# ProxDDP optimization config (simulation/run_batch.py reads this alongside config.yml)
+# Activate: set use_proxddp: true in config.yml
+
+# Path to the conda env that has aligator + pinocchio installed
+proxddp_python: /home/dohyeon/miniconda3/envs/proxddp2/bin/python
+
+# Optimization hyperparameters
+w_d: 3.0     # SE(3) tracking weight
+w_dq: 0.01    # joint velocity regularization weight
+w_tau: 0.001  # torque regularization weight
+dt: 0.1       # integration timestep (s)
+
+# compare_freepose: also produce freepose_compare.mp4 (original | optimized) side-by-side
+compare_freepose: true

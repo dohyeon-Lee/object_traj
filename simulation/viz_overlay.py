@@ -181,13 +181,21 @@ def make_object_updater(env, quat0_xyzw):
 def _load_data(data_dir):
     data_dir = Path(data_dir)
     npz    = np.load(data_dir / "object_pose" / "poses.npz")
-    poses  = npz["poses"]
+    key    = next((k for k in ["poses", "poses_cam"] if k in npz.files), None)
+    if key is None:
+        raise KeyError(f"No known pose key in {npz.files}. Expected 'poses' or 'poses_cam'.")
+    poses  = npz[key]
     frames = npz["frames"]
     cam    = json.loads((data_dir / "camera.json").read_text())
     K      = np.array(cam["intrinsics"])
     images = []
     for f in frames:
-        img = cv2.imread(str(data_dir / "rgb" / f"{f:06d}.jpg"))
+        jpg = data_dir / "rgb" / f"{f:06d}.jpg"
+        png = data_dir / "rgb" / f"{f:06d}.png"
+        path = jpg if jpg.exists() else png
+        img = cv2.imread(str(path))
+        if img is None:
+            raise FileNotFoundError(f"Missing rgb frame: {path}")
         images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     return poses, images, K
 

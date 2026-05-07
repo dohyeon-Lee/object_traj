@@ -12,6 +12,7 @@ Creates (in-place inside data_dir):
 
 Usage:
   python convert_sam3d.py data/bob_0
+  python convert_sam3d.py data/dexycb_final --batch
   python convert_sam3d.py data/juice --pose-R R_cum --pose-t t
 """
 import argparse
@@ -105,22 +106,24 @@ def strip_vertex_colors(src: Path, dst: Path) -> None:
 def convert_existing_obj_mesh(data_dir: Path) -> bool:
     mesh_dir = data_dir / "mesh"
     obj_path = mesh_dir / "textured_simple.obj"
-    candidates = [
-        obj_path,
-        mesh_dir / "mesh_opencv.obj",
-        mesh_dir / "textured.obj",
-    ]
 
-    for src in candidates:
-        if src.exists():
-            if src == obj_path:
-                print(f"  mesh   → {obj_path}  (already standard, kept)")
-            else:
-                strip_vertex_colors(src, obj_path)
-                print(f"  mesh   → {obj_path}  (from {src.name})")
-            write_placeholder_texture(mesh_dir)
-            return True
-    return False
+    if obj_path.exists():
+        print(f"  mesh   → {obj_path}  (already standard, kept)")
+        write_placeholder_texture(mesh_dir)
+        return True
+
+    candidates = sorted(
+        p for p in mesh_dir.glob("*.obj")
+        if not p.name.endswith(".glb.obj")
+    )
+    if not candidates:
+        return False
+
+    src = candidates[0]
+    strip_vertex_colors(src, obj_path)
+    print(f"  mesh   → {obj_path}  (from {src.name})")
+    write_placeholder_texture(mesh_dir)
+    return True
 
 
 def convert_mesh(data_dir: Path) -> None:
@@ -130,7 +133,8 @@ def convert_mesh(data_dir: Path) -> None:
     if not (data_dir / "sam3d_mesh.glb").exists():
         if convert_existing_obj_mesh(data_dir):
             return
-        raise FileNotFoundError(f"Missing mesh source: {data_dir / 'sam3d_mesh.glb'}")
+        print(f"  mesh   → no source found, skipping")
+        return
 
     try:
         import trimesh
@@ -214,6 +218,10 @@ def main() -> None:
         "--skip-mesh", action="store_true",
         help="Skip GLB→OBJ conversion (requires trimesh)",
     )
+    parser.add_argument(
+        "--batch", action="store_true",
+        help="Convert all immediate subdirectories of data_dir (e.g. gt/, ours/, freepose/)",
+    )
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -224,13 +232,29 @@ def main() -> None:
     if not data_dir.exists():
         raise SystemExit(f"Data directory not found: {data_dir}")
 
-    print(f"Converting {data_dir} ...")
-    convert_poses(data_dir, args.pose_R, args.pose_t)
-    convert_camera(data_dir)
-    if not args.skip_mesh:
-        convert_mesh(data_dir)
-    convert_rgb(data_dir)
-    print("Done.")
+    if args.batch:
+        _DATA_MARKERS = {"object_pose", "rgb", "mesh", "poses.npz"}
+        _EXCLUDE_NAMES = {"object_pose", "mesh", "rgb", "__pycache__"}
+        targets = sorted(
+            d for d in data_dir.rglob("*")
+            if d.is_dir()
+            and d.name not in _EXCLUDE_NAMES
+            and any((d / m).exists() for m in _DATA_MARKERS)
+        )
+        if not targets:
+            raise SystemExit(f"No data subdirectories found under {data_dir}")
+        print(f"Batch mode: {len(targets)} data directories under {data_dir}")
+    else:
+        targets = [data_dir]
+
+    for target in targets:
+        print(f"\nConverting {target} ...")
+        convert_poses(target, args.pose_R, args.pose_t)
+        convert_camera(target)
+        if not args.skip_mesh:
+            convert_mesh(target)
+        convert_rgb(target)
+    print("\nDone.")
 
 
 if __name__ == "__main__":
