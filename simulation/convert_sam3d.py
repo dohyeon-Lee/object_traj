@@ -11,7 +11,7 @@ Creates (in-place inside data_dir):
   rgb/{:06d}.jpg          – symlinks → existing {:04d}.png  (viz_overlay expects 6-digit jpg)
 
 Usage:
-  python convert_sam3d.py data/pour_into_8625
+  python convert_sam3d.py data/bowl6
   python convert_sam3d.py data/juice --pose-R R_cum --pose-t t
 """
 import argparse

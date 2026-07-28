@@ -1,8 +1,7 @@
 # Usage (run from project root, activate object_traj venv first):
 #   source .venv/bin/activate
 #   python src/main.py data/freepose --no-wandb --show-eef --angle 45 --eef-dir my
-#   python simulation/main.py data/035_power_drill_20200709_151335 --no-wandb --show-eef --angle 45 --eef-dir mz
-
+#   python simulation/main.py data/bowl6 --show-eef 
 import os
 import argparse
 import json

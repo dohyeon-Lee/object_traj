@@ -1,6 +1,6 @@
 # Shared between simulation/main_abs.py and deploy_franka/main.py
 # data/035_power_drill_20200709_151335
-data_dir: data/pour_into_8625         # dataset to use (relative to project root)
+data_dir: data/bowl6         # dataset to use (relative to project root)
 
 angle: 0                    # camera-to-robot horizontal rotation (degrees)
 elevation: 90               # camera vertical tilt (degrees, 0=horizontal, 90=top-down)
